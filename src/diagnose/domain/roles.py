@@ -25,6 +25,7 @@ class Permission(StrEnum):
     MANAGE_USERS = "manage:users"
     CREATE_INCIDENT = "create:incident"
     TRANSITION_INCIDENT = "transition:incident"
+    ASSIGN_INCIDENT = "assign:incident"
     CLOSE_INCIDENT = "close:incident"
     ADD_EVIDENCE = "add:evidence"
     MANAGE_SERVICES = "manage:services"
@@ -38,6 +39,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.MANAGE_USERS,
         Permission.CREATE_INCIDENT,
         Permission.TRANSITION_INCIDENT,
+        Permission.ASSIGN_INCIDENT,
         Permission.CLOSE_INCIDENT,
         Permission.ADD_EVIDENCE,
         Permission.MANAGE_SERVICES,
@@ -47,6 +49,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
     Role.ENGINEER: {
         Permission.CREATE_INCIDENT,
         Permission.TRANSITION_INCIDENT,
+        Permission.ASSIGN_INCIDENT,
         Permission.CLOSE_INCIDENT,
         Permission.ADD_EVIDENCE,
         Permission.MANAGE_SERVICES,
@@ -55,6 +58,8 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
     Role.RESPONDER: {
         Permission.CREATE_INCIDENT,
         Permission.TRANSITION_INCIDENT,
+        Permission.ASSIGN_INCIDENT,
+        Permission.CLOSE_INCIDENT,
         Permission.ADD_EVIDENCE,
         Permission.VIEW_INCIDENTS,
     },

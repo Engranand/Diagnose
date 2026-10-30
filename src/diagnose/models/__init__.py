@@ -2,6 +2,8 @@
 
 from diagnose.models.audit_log import AuditLog
 from diagnose.models.base import Base, TimestampMixin
+from diagnose.models.incident import Incident
+from diagnose.models.incident_event import IncidentEvent
 from diagnose.models.organization import Organization
 from diagnose.models.service import Service
 from diagnose.models.user import User
@@ -12,5 +14,7 @@ __all__ = [
     "Organization",
     "User",
     "Service",
+    "Incident",
+    "IncidentEvent",
     "AuditLog",
 ]

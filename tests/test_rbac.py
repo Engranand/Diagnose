@@ -28,6 +28,7 @@ def test_domain_rbac_matrix_complete() -> None:
     # ENGINEER permissions
     assert has_permission(Role.ENGINEER, Permission.CREATE_INCIDENT)
     assert has_permission(Role.ENGINEER, Permission.TRANSITION_INCIDENT)
+    assert has_permission(Role.ENGINEER, Permission.ASSIGN_INCIDENT)
     assert has_permission(Role.ENGINEER, Permission.CLOSE_INCIDENT)
     assert has_permission(Role.ENGINEER, Permission.ADD_EVIDENCE)
     assert has_permission(Role.ENGINEER, Permission.MANAGE_SERVICES)
@@ -39,9 +40,10 @@ def test_domain_rbac_matrix_complete() -> None:
     # RESPONDER permissions
     assert has_permission(Role.RESPONDER, Permission.CREATE_INCIDENT)
     assert has_permission(Role.RESPONDER, Permission.TRANSITION_INCIDENT)
+    assert has_permission(Role.RESPONDER, Permission.ASSIGN_INCIDENT)
+    assert has_permission(Role.RESPONDER, Permission.CLOSE_INCIDENT)
     assert has_permission(Role.RESPONDER, Permission.ADD_EVIDENCE)
     assert has_permission(Role.RESPONDER, Permission.VIEW_INCIDENTS)
-    assert not has_permission(Role.RESPONDER, Permission.CLOSE_INCIDENT)
     assert not has_permission(Role.RESPONDER, Permission.MANAGE_ORGANIZATION)
     assert not has_permission(Role.RESPONDER, Permission.MANAGE_USERS)
 

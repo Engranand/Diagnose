@@ -12,6 +12,8 @@ from diagnose.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from diagnose.models.audit_log import AuditLog
+    from diagnose.models.incident import Incident
+    from diagnose.models.incident_event import IncidentEvent
     from diagnose.models.service import Service
     from diagnose.models.user import User
 
@@ -58,6 +60,16 @@ class Organization(Base, TimestampMixin):
     )
     services: Mapped[list[Service]] = relationship(
         "Service",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    incidents: Mapped[list[Incident]] = relationship(
+        "Incident",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    incident_events: Mapped[list[IncidentEvent]] = relationship(
+        "IncidentEvent",
         back_populates="organization",
         cascade="all, delete-orphan",
     )

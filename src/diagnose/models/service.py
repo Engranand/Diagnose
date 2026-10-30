@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from diagnose.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from diagnose.models.incident import Incident
     from diagnose.models.organization import Organization
 
 
@@ -74,4 +75,9 @@ class Service(Base, TimestampMixin):
     organization: Mapped[Organization] = relationship(
         "Organization",
         back_populates="services",
+    )
+    incidents: Mapped[list[Incident]] = relationship(
+        "Incident",
+        back_populates="service",
+        cascade="all, delete-orphan",
     )

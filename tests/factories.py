@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from diagnose.core.security import create_access_token, hash_password
 from diagnose.domain.roles import Role
+from diagnose.models.incident import Incident
 from diagnose.models.organization import Organization
 from diagnose.models.service import Service
 from diagnose.models.user import User
@@ -97,3 +98,39 @@ async def create_test_service(
     await session.commit()
     await session.refresh(service)
     return service
+
+
+async def create_test_incident(
+    session: AsyncSession,
+    organization_id: UUID,
+    service_id: UUID,
+    title: str | None = None,
+    severity: str = "MEDIUM",
+    status: str = "DETECTED",
+    incident_number: int | None = None,
+    assigned_user_id: UUID | None = None,
+) -> Incident:
+    """Create and persist an incident for tests."""
+    uid = uuid.uuid4().hex[:8]
+    if incident_number is None:
+        from sqlalchemy import func, select
+        num_stmt = select(func.coalesce(func.max(Incident.incident_number), 0) + 1).where(
+            Incident.organization_id == organization_id
+        )
+        incident_number = int((await session.execute(num_stmt)).scalar_one())
+
+    incident = Incident(
+        organization_id=organization_id,
+        service_id=service_id,
+        incident_number=incident_number,
+        title=title or f"Test Incident {uid}",
+        description=f"Incident description {uid}",
+        severity=severity,
+        status=status,
+        assigned_user_id=assigned_user_id,
+        version=1,
+    )
+    session.add(incident)
+    await session.commit()
+    await session.refresh(incident)
+    return incident
