@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # ── Redis ────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # ── Security & JWT ───────────────────────────────────────────────
+    JWT_SECRET_KEY: str = (
+        "diagnose-insecure-dev-secret-key-do-not-use-in-production-32chars"
+    )
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+
     # ── API ──────────────────────────────────────────────────────────
     API_V1_PREFIX: str = "/api/v1"
 

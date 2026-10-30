@@ -23,6 +23,7 @@ from starlette import status
 import structlog
 
 from diagnose.domain.exceptions import (
+    AuthenticationError,
     AuthorizationError,
     ConflictError,
     DomainException,
@@ -45,6 +46,14 @@ def _error_response(
 
 def setup_exception_handlers(app: FastAPI) -> None:
     """Register exception handlers on the FastAPI application."""
+
+    @app.exception_handler(AuthenticationError)
+    async def _authentication_error(
+        _request: Request, exc: AuthenticationError
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", str(exc)
+        )
 
     @app.exception_handler(EntityNotFound)
     async def _entity_not_found(

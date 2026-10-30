@@ -66,3 +66,12 @@ async def client(app) -> AsyncClient:
         transport=transport, base_url="http://testserver"
     ) as ac:
         yield ac
+
+
+@pytest.fixture()
+async def db_session(app):
+    """Yield an independent async DB session for test setup."""
+    session_factory = app.state.db_session_factory
+    async with session_factory() as session:
+        yield session
+

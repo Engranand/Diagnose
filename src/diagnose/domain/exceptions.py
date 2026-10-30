@@ -7,6 +7,7 @@ responses by the global exception handlers in
 Hierarchy::
 
     DomainException
+    ├── AuthenticationError     → 401
     ├── EntityNotFound          → 404
     ├── InvalidStateTransition  → 409
     ├── AuthorizationError      → 403
@@ -19,6 +20,13 @@ from __future__ import annotations
 
 class DomainException(Exception):
     """Base exception for all domain errors."""
+
+
+class AuthenticationError(DomainException):
+    """Raised when authentication credentials or token are invalid or missing."""
+
+    def __init__(self, message: str = "Invalid authentication credentials.") -> None:
+        super().__init__(message)
 
 
 class EntityNotFound(DomainException):

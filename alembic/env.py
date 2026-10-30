@@ -8,7 +8,8 @@ from alembic import context
 
 # Import application models and settings so Alembic can read metadata
 # and resolve the database URL from application configuration.
-from diagnose.models.base import Base  # noqa: F401 — registers metadata
+import diagnose.models  # noqa: F401 — registers all models on Base.metadata
+from diagnose.models.base import Base
 from diagnose.settings import get_settings
 
 config = context.config
