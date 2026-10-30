@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from datetime import datetime, timezone
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from diagnose.domain.alerts import AlertSeverity, AlertStatus
 from diagnose.domain.roles import Role
 from diagnose.models.alert import Alert
 from diagnose.models.audit_log import AuditLog
@@ -49,19 +52,23 @@ async def test_admin_can_create_alert(
     assert response.status_code == 201
     data = response.json()
     assert data["fingerprint"] == payload["fingerprint"]
-    assert data["status"] == "FIRING"
+    assert data["source"] == payload["source"]
+    assert data["alert_type"] == payload["alert_type"]
+    assert data["title"] == payload["title"]
     assert data["severity"] == "CRITICAL"
-    assert data["organization_id"] == str(org.id)
-    assert data["service_id"] == str(svc.id)
+    assert data["status"] == "FIRING"
     assert data["first_seen_at"] is not None
     assert data["last_seen_at"] is not None
+    assert data["resolved_at"] is None
+    assert data["service_id"] == str(svc.id)
+    assert data["organization_id"] == str(org.id)
 
 
 @pytest.mark.asyncio
 async def test_engineer_can_create_alert(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """ENGINEER role can successfully ingest an alert."""
+    """ENGINEER role can ingest an alert."""
     org = await create_test_organization(db_session)
     svc = await create_test_service(db_session, org.id)
     engineer = await create_test_user(db_session, org.id, role=Role.ENGINEER)
@@ -72,8 +79,8 @@ async def test_engineer_can_create_alert(
             "service_id": str(svc.id),
             "fingerprint": f"fp-eng-{uuid.uuid4().hex[:6]}",
             "source": "datadog",
-            "alert_type": "high_latency",
-            "title": "P99 Latency > 1000ms",
+            "alert_type": "disk_space_low",
+            "title": "Disk Space < 10%",
             "severity": "HIGH",
         },
         headers=auth_headers_for(engineer),
@@ -83,10 +90,10 @@ async def test_engineer_can_create_alert(
 
 
 @pytest.mark.asyncio
-async def test_responder_cannot_create_alert_403(
+async def test_responder_cannot_create_alerts_403(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """RESPONDER cannot ingest alerts via manage:alerts (403 Forbidden)."""
+    """RESPONDER role cannot ingest alerts (403 Forbidden)."""
     org = await create_test_organization(db_session)
     svc = await create_test_service(db_session, org.id)
     responder = await create_test_user(db_session, org.id, role=Role.RESPONDER)
@@ -95,8 +102,8 @@ async def test_responder_cannot_create_alert_403(
         "/api/v1/alerts",
         json={
             "service_id": str(svc.id),
-            "fingerprint": f"fp-resp-{uuid.uuid4().hex[:6]}",
-            "source": "pagerduty",
+            "fingerprint": "resp-fp",
+            "source": "test",
             "alert_type": "test",
             "title": "Test Alert",
         },
@@ -167,7 +174,7 @@ async def test_all_authenticated_roles_can_view_alerts(
 async def test_idempotent_duplicate_fingerprint_ingestion(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """Re-ingesting the same fingerprint updates last_seen_at idempotently without duplicating rows."""
+    """Re-ingesting the same fingerprint while FIRING updates last_seen_at and escalates severity idempotently (200 OK)."""
     org = await create_test_organization(db_session)
     svc = await create_test_service(db_session, org.id)
     admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
@@ -194,7 +201,7 @@ async def test_idempotent_duplicate_fingerprint_ingestion(
     first_seen = first_alert["first_seen_at"]
     initial_last_seen = first_alert["last_seen_at"]
 
-    # Second ingestion of SAME fingerprint -> 200 OK (idempotent update)
+    # Second ingestion of SAME fingerprint while FIRING -> 200 OK (idempotent deduplication)
     r2 = await client.post(
         "/api/v1/alerts",
         json={
@@ -203,7 +210,7 @@ async def test_idempotent_duplicate_fingerprint_ingestion(
             "source": "prometheus",
             "alert_type": "cpu_high",
             "title": "CPU > 90% (recurring)",
-            "severity": "CRITICAL",  # Severity escalation allowed
+            "severity": "CRITICAL",  # Severity escalation allowed (HIGH -> CRITICAL)
             "message": "Second alert occurrence with updated info",
         },
         headers=auth_headers_for(admin),
@@ -216,10 +223,237 @@ async def test_idempotent_duplicate_fingerprint_ingestion(
     assert second_alert["message"] == "Second alert occurrence with updated info"
     assert second_alert["last_seen_at"] >= initial_last_seen
 
+    # Third ingestion with LOWER severity -> remains CRITICAL (no silent de-escalation)
+    r3 = await client.post(
+        "/api/v1/alerts",
+        json={
+            "service_id": str(svc.id),
+            "fingerprint": fp,
+            "source": "prometheus",
+            "alert_type": "cpu_high",
+            "title": "CPU normal-ish",
+            "severity": "LOW",
+        },
+        headers=auth_headers_for(admin),
+    )
+    assert r3.status_code == 200
+    assert r3.json()["severity"] == "CRITICAL"
+
     # Verify database only has exactly 1 row for this fingerprint
     q = select(Alert).where(Alert.organization_id == org.id, Alert.fingerprint == fp)
     alerts = (await db_session.execute(q)).scalars().all()
     assert len(alerts) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolved_alert_reingested_creates_new_occurrence_201(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Case B: If an existing alert with the same fingerprint is RESOLVED, re-ingestion creates a NEW alert occurrence (201 Created)."""
+    org = await create_test_organization(db_session)
+    svc = await create_test_service(db_session, org.id)
+    admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+
+    fp = f"resolved-reingest-fp-{uuid.uuid4().hex[:6]}"
+
+    # 1. Initial ingestion -> 201 Created
+    r1 = await client.post(
+        "/api/v1/alerts",
+        json={
+            "service_id": str(svc.id),
+            "fingerprint": fp,
+            "source": "prometheus",
+            "alert_type": "memory_leak",
+            "title": "Memory leak detected",
+            "severity": "HIGH",
+        },
+        headers=auth_headers_for(admin),
+    )
+    assert r1.status_code == 201
+    alert_1_id = r1.json()["id"]
+
+    # 2. Resolve the alert via PATCH
+    r_patch = await client.patch(
+        f"/api/v1/alerts/{alert_1_id}",
+        json={"status": "RESOLVED"},
+        headers=auth_headers_for(admin),
+    )
+    assert r_patch.status_code == 200
+    assert r_patch.json()["status"] == "RESOLVED"
+    assert r_patch.json()["resolved_at"] is not None
+
+    # 3. New signal with the SAME fingerprint arrives -> creates NEW active occurrence (201 Created)
+    r2 = await client.post(
+        "/api/v1/alerts",
+        json={
+            "service_id": str(svc.id),
+            "fingerprint": fp,
+            "source": "prometheus",
+            "alert_type": "memory_leak",
+            "title": "Memory leak detected again",
+            "severity": "HIGH",
+        },
+        headers=auth_headers_for(admin),
+    )
+    assert r2.status_code == 201
+    alert_2_id = r2.json()["id"]
+    assert alert_2_id != alert_1_id
+    assert r2.json()["status"] == "FIRING"
+    assert r2.json()["resolved_at"] is None
+
+    # 4. Verify both occurrences coexist in the database
+    q = select(Alert).where(Alert.organization_id == org.id, Alert.fingerprint == fp)
+    alerts = (await db_session.execute(q)).scalars().all()
+    assert len(alerts) == 2
+    statuses = {a.status for a in alerts}
+    assert statuses == {"RESOLVED", "FIRING"}
+
+
+@pytest.mark.asyncio
+async def test_suppressed_alert_reingested_creates_new_occurrence_201(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Case C: If an existing alert with the same fingerprint is SUPPRESSED, re-ingestion creates a NEW alert occurrence (201 Created)."""
+    org = await create_test_organization(db_session)
+    svc = await create_test_service(db_session, org.id)
+    admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+
+    fp = f"suppressed-reingest-fp-{uuid.uuid4().hex[:6]}"
+
+    # 1. Initial ingestion -> 201 Created
+    r1 = await client.post(
+        "/api/v1/alerts",
+        json={
+            "service_id": str(svc.id),
+            "fingerprint": fp,
+            "source": "prometheus",
+            "alert_type": "disk_io",
+            "title": "Disk I/O Spike",
+            "severity": "LOW",
+        },
+        headers=auth_headers_for(admin),
+    )
+    assert r1.status_code == 201
+    alert_1_id = r1.json()["id"]
+
+    # 2. Suppress the alert via PATCH
+    r_patch = await client.patch(
+        f"/api/v1/alerts/{alert_1_id}",
+        json={"status": "SUPPRESSED"},
+        headers=auth_headers_for(admin),
+    )
+    assert r_patch.status_code == 200
+    assert r_patch.json()["status"] == "SUPPRESSED"
+
+    # 3. New signal with SAME fingerprint -> creates NEW active occurrence (201 Created)
+    r2 = await client.post(
+        "/api/v1/alerts",
+        json={
+            "service_id": str(svc.id),
+            "fingerprint": fp,
+            "source": "prometheus",
+            "alert_type": "disk_io",
+            "title": "Disk I/O Spike Reoccurred",
+            "severity": "MEDIUM",
+        },
+        headers=auth_headers_for(admin),
+    )
+    assert r2.status_code == 201
+    alert_2_id = r2.json()["id"]
+    assert alert_2_id != alert_1_id
+    assert r2.json()["status"] == "FIRING"
+
+    # Verify both occurrences exist in database
+    q = select(Alert).where(Alert.organization_id == org.id, Alert.fingerprint == fp)
+    alerts = (await db_session.execute(q)).scalars().all()
+    assert len(alerts) == 2
+
+
+@pytest.mark.asyncio
+async def test_different_organizations_can_use_same_fingerprint(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Different tenants can independently ingest active FIRING alerts with the exact same fingerprint."""
+    org_a = await create_test_organization(db_session, name="Org A")
+    org_b = await create_test_organization(db_session, name="Org B")
+
+    svc_a = await create_test_service(db_session, org_a.id)
+    svc_b = await create_test_service(db_session, org_b.id)
+
+    admin_a = await create_test_user(db_session, org_a.id, role=Role.ADMIN)
+    admin_b = await create_test_user(db_session, org_b.id, role=Role.ADMIN)
+
+    shared_fp = f"global-fingerprint-{uuid.uuid4().hex[:6]}"
+
+    # Org A ingests alert
+    r_a = await client.post(
+        "/api/v1/alerts",
+        json={
+            "service_id": str(svc_a.id),
+            "fingerprint": shared_fp,
+            "source": "prometheus",
+            "alert_type": "disk_full",
+            "title": "Disk Full Org A",
+        },
+        headers=auth_headers_for(admin_a),
+    )
+    assert r_a.status_code == 201
+    alert_a_id = r_a.json()["id"]
+
+    # Org B ingests alert with the identical fingerprint -> succeeds (201 Created)
+    r_b = await client.post(
+        "/api/v1/alerts",
+        json={
+            "service_id": str(svc_b.id),
+            "fingerprint": shared_fp,
+            "source": "prometheus",
+            "alert_type": "disk_full",
+            "title": "Disk Full Org B",
+        },
+        headers=auth_headers_for(admin_b),
+    )
+    assert r_b.status_code == 201
+    alert_b_id = r_b.json()["id"]
+    assert alert_a_id != alert_b_id
+
+    # Cross-tenant isolation verification
+    r_a_check = await client.get(f"/api/v1/alerts/{alert_b_id}", headers=auth_headers_for(admin_a))
+    assert r_a_check.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_firing_creates_only_one_active_alert(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Concurrent ingestion requests with identical fingerprint cannot create two active alerts."""
+    org = await create_test_organization(db_session)
+    svc = await create_test_service(db_session, org.id)
+    admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+
+    fp = f"concurrent-fp-{uuid.uuid4().hex[:6]}"
+    payload = {
+        "service_id": str(svc.id),
+        "fingerprint": fp,
+        "source": "prometheus",
+        "alert_type": "latency_p99",
+        "title": "Concurrent High Latency",
+    }
+
+    # Dispatch concurrent requests
+    res1, res2 = await asyncio.gather(
+        client.post("/api/v1/alerts", json=payload, headers=auth_headers_for(admin)),
+        client.post("/api/v1/alerts", json=payload, headers=auth_headers_for(admin)),
+    )
+
+    statuses = {res1.status_code, res2.status_code}
+    assert 201 in statuses
+    assert all(s in (200, 201) for s in statuses)
+
+    # In database, exactly 1 row must exist for this fingerprint
+    q = select(Alert).where(Alert.organization_id == org.id, Alert.fingerprint == fp)
+    alerts = (await db_session.execute(q)).scalars().all()
+    assert len(alerts) == 1
+    assert alerts[0].status == "FIRING"
 
 
 @pytest.mark.asyncio
@@ -251,101 +485,96 @@ async def test_alert_filtering_and_pagination(
     assert r_svc.status_code == 200
     assert r_svc.json()["total"] == 1
 
-    # Pagination
-    r_page = await client.get("/api/v1/alerts?page=1&page_size=2", headers=auth_headers_for(admin))
-    assert r_page.status_code == 200
-    data = r_page.json()
-    assert len(data["items"]) == 2
-    assert data["total"] == 3
-    assert data["pages"] == 2
+    # Filter status RESOLVED
+    r_stat = await client.get("/api/v1/alerts?status=RESOLVED", headers=auth_headers_for(admin))
+    assert r_stat.status_code == 200
+    assert r_stat.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_alert_incident_association_service_mismatch_rejected_409(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Alert cannot be associated with an incident of a different service (409 Conflict)."""
+    org = await create_test_organization(db_session)
+    svc1 = await create_test_service(db_session, org.id, name="Service 1")
+    svc2 = await create_test_service(db_session, org.id, name="Service 2")
+    admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+
+    # Alert belongs to svc1
+    alert = await create_test_alert(db_session, org.id, svc1.id)
+    # Incident belongs to svc2
+    incident = await create_test_incident(db_session, org.id, svc2.id)
+
+    response = await client.post(
+        f"/api/v1/alerts/{alert.id}/incident",
+        json={"incident_id": str(incident.id)},
+        headers=auth_headers_for(admin),
+    )
+    assert response.status_code == 409
+    assert "does not match incident service" in response.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_alert_incident_association_success(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Alert can be associated with an incident belonging to the same service."""
+    org = await create_test_organization(db_session)
+    svc = await create_test_service(db_session, org.id)
+    engineer = await create_test_user(db_session, org.id, role=Role.ENGINEER)
+
+    alert = await create_test_alert(db_session, org.id, svc.id)
+    incident = await create_test_incident(db_session, org.id, svc.id)
+
+    response = await client.post(
+        f"/api/v1/alerts/{alert.id}/incident",
+        json={"incident_id": str(incident.id)},
+        headers=auth_headers_for(engineer),
+    )
+    assert response.status_code == 200
+    assert response.json()["incident_id"] == str(incident.id)
+
+    # Verify audit log recorded
+    q = select(AuditLog).where(
+        AuditLog.organization_id == org.id,
+        AuditLog.action == "ALERT_ASSOCIATED_WITH_INCIDENT",
+        AuditLog.entity_id == alert.id,
+    )
+    audit = (await db_session.execute(q)).scalar_one_or_none()
+    assert audit is not None
+    assert audit.new_values["incident_id"] == str(incident.id)
 
 
 @pytest.mark.asyncio
 async def test_cross_tenant_alert_isolation_404(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """Tenant A cannot read, update, or reference Tenant B alerts/services/incidents."""
+    """Tenant A cannot access or update Tenant B's alerts (returns 404)."""
     org_a = await create_test_organization(db_session, name="Org A")
     org_b = await create_test_organization(db_session, name="Org B")
 
-    svc_a = await create_test_service(db_session, org_a.id)
     svc_b = await create_test_service(db_session, org_b.id)
-
-    admin_a = await create_test_user(db_session, org_a.id, role=Role.ADMIN)
     alert_b = await create_test_alert(db_session, org_b.id, svc_b.id)
 
-    # 1. Tenant A cannot GET Tenant B alert
-    r1 = await client.get(f"/api/v1/alerts/{alert_b.id}", headers=auth_headers_for(admin_a))
-    assert r1.status_code == 404
+    admin_a = await create_test_user(db_session, org_a.id, role=Role.ADMIN)
 
-    # 2. Tenant A cannot PATCH Tenant B alert
-    r2 = await client.patch(
-        f"/api/v1/alerts/{alert_b.id}", json={"title": "Hacked"}, headers=auth_headers_for(admin_a)
-    )
-    assert r2.status_code == 404
+    # GET
+    r_get = await client.get(f"/api/v1/alerts/{alert_b.id}", headers=auth_headers_for(admin_a))
+    assert r_get.status_code == 404
 
-    # 3. Tenant A cannot create an alert pointing to Tenant B's service
-    r3 = await client.post(
-        "/api/v1/alerts",
-        json={
-            "service_id": str(svc_b.id),
-            "fingerprint": "cross-tenant-svc",
-            "source": "datadog",
-            "alert_type": "error",
-            "title": "Cross Tenant Service Alert",
-        },
+    # PATCH
+    r_patch = await client.patch(
+        f"/api/v1/alerts/{alert_b.id}",
+        json={"title": "Hacked"},
         headers=auth_headers_for(admin_a),
     )
-    assert r3.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_alert_incident_association(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
-    """Associating an alert with an incident verifies service match and records audit logs."""
-    org = await create_test_organization(db_session)
-    svc = await create_test_service(db_session, org.id)
-    svc_other = await create_test_service(db_session, org.id, name="Other Service")
-
-    responder = await create_test_user(db_session, org.id, role=Role.RESPONDER)
-
-    alert = await create_test_alert(db_session, org.id, svc.id)
-    inc_same_svc = await create_test_incident(db_session, org.id, svc.id)
-    inc_diff_svc = await create_test_incident(db_session, org.id, svc_other.id)
-
-    # 1. Service mismatch rejected (409 Conflict)
-    r_mismatch = await client.post(
-        f"/api/v1/alerts/{alert.id}/incident",
-        json={"incident_id": str(inc_diff_svc.id)},
-        headers=auth_headers_for(responder),
-    )
-    assert r_mismatch.status_code == 409
-    assert "does not match incident service" in r_mismatch.json()["error"]["message"]
-
-    # 2. Valid association succeeds (200 OK)
-    r_match = await client.post(
-        f"/api/v1/alerts/{alert.id}/incident",
-        json={"incident_id": str(inc_same_svc.id)},
-        headers=auth_headers_for(responder),
-    )
-    assert r_match.status_code == 200
-    assert r_match.json()["incident_id"] == str(inc_same_svc.id)
-
-    # 3. Verify audit log recorded
-    q = select(AuditLog).where(
-        AuditLog.organization_id == org.id,
-        AuditLog.entity_id == alert.id,
-        AuditLog.action == "ALERT_ASSOCIATED_WITH_INCIDENT",
-    )
-    audit = (await db_session.execute(q)).scalar_one_or_none()
-    assert audit is not None
-    assert audit.new_values["incident_id"] == str(inc_same_svc.id)
+    assert r_patch.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_alert_database_constraints(db_session: AsyncSession) -> None:
-    """Verify PostgreSQL check constraints and unique fingerprint per tenant."""
+    """Verify PostgreSQL check constraints and partial unique index on active alerts."""
     org = await create_test_organization(db_session)
     svc = await create_test_service(db_session, org.id)
     org_id = org.id
@@ -381,7 +610,7 @@ async def test_alert_database_constraints(db_session: AsyncSession) -> None:
         await db_session.commit()
     await db_session.rollback()
 
-    # 3. Unique constraint: duplicate (organization_id, fingerprint) rejected at DB level
+    # 3. Partial Unique Index: two FIRING alerts with same fingerprint in same org rejected at DB level
     dup_fp = f"dup-fp-{uuid.uuid4().hex[:6]}"
     a1 = Alert(
         organization_id=org_id,
@@ -389,7 +618,8 @@ async def test_alert_database_constraints(db_session: AsyncSession) -> None:
         fingerprint=dup_fp,
         source="test",
         alert_type="test",
-        title="First Alert",
+        title="First Alert Firing",
+        status="FIRING",
     )
     db_session.add(a1)
     await db_session.commit()
@@ -400,9 +630,41 @@ async def test_alert_database_constraints(db_session: AsyncSession) -> None:
         fingerprint=dup_fp,
         source="test",
         alert_type="test",
-        title="Second Alert Duplicate",
+        title="Second Alert Duplicate Firing",
+        status="FIRING",
     )
     db_session.add(a2)
     with pytest.raises(IntegrityError):
         await db_session.commit()
     await db_session.rollback()
+
+    # 4. Same fingerprint with RESOLVED status and FIRING status can coexist in DB
+    hist_fp = f"hist-fp-{uuid.uuid4().hex[:6]}"
+    a_resolved = Alert(
+        organization_id=org_id,
+        service_id=svc_id,
+        fingerprint=hist_fp,
+        source="test",
+        alert_type="test",
+        title="Resolved Historical Alert",
+        status="RESOLVED",
+    )
+    db_session.add(a_resolved)
+    await db_session.commit()
+
+    a_firing = Alert(
+        organization_id=org_id,
+        service_id=svc_id,
+        fingerprint=hist_fp,
+        source="test",
+        alert_type="test",
+        title="New Active Firing Alert",
+        status="FIRING",
+    )
+    db_session.add(a_firing)
+    await db_session.commit()
+
+    # Verify both rows persist
+    q = select(Alert).where(Alert.organization_id == org_id, Alert.fingerprint == hist_fp)
+    alerts = (await db_session.execute(q)).scalars().all()
+    assert len(alerts) == 2

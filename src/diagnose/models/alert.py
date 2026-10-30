@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,10 +43,12 @@ class Alert(Base, TimestampMixin):
             "status IN ('FIRING', 'RESOLVED', 'SUPPRESSED')",
             name="ck_alerts_valid_status",
         ),
-        UniqueConstraint(
+        Index(
+            "uq_alerts_org_active_fingerprint",
             "organization_id",
             "fingerprint",
-            name="uq_alerts_org_fingerprint",
+            unique=True,
+            postgresql_where=text("status = 'FIRING'"),
         ),
         Index("ix_alerts_org_status", "organization_id", "status"),
         Index("ix_alerts_org_severity", "organization_id", "severity"),

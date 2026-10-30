@@ -42,13 +42,16 @@ class AlertRepository:
         session: AsyncSession,
         organization_id: uuid.UUID,
         fingerprint: str,
+        status: str | None = None,
         for_update: bool = False,
     ) -> Alert | None:
-        """Retrieve an alert by fingerprint strictly scoped to an organization."""
+        """Retrieve an alert by fingerprint strictly scoped to an organization, optionally filtering by status."""
         query = select(Alert).where(
             Alert.organization_id == organization_id,
             Alert.fingerprint == fingerprint,
         )
+        if status is not None:
+            query = query.where(Alert.status == status)
         if for_update:
             query = query.with_for_update()
         result = await session.execute(query)

@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from diagnose.domain.evidence import compute_evidence_hash
+from diagnose.domain.evidence import EvidenceType, compute_evidence_hash
 from diagnose.domain.roles import Role
 from diagnose.models.audit_log import AuditLog
 from diagnose.models.evidence import Evidence
@@ -56,6 +56,57 @@ async def test_admin_can_create_evidence(
     assert data["collected_by_user_id"] == str(admin.id)
     assert data["incident_id"] == str(inc.id)
     assert data["organization_id"] == str(org.id)
+
+
+@pytest.mark.asyncio
+async def test_all_nine_evidence_types_supported(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Evidence layer supports all nine approved EvidenceType values: LOG, METRIC, TRACE, ALERT, DEPLOYMENT, CONFIG, EVENT, DOCUMENT, OTHER."""
+    org = await create_test_organization(db_session)
+    svc = await create_test_service(db_session, org.id)
+    inc = await create_test_incident(db_session, org.id, svc.id)
+    admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+
+    approved_types = [
+        "LOG",
+        "METRIC",
+        "TRACE",
+        "ALERT",
+        "DEPLOYMENT",
+        "CONFIG",
+        "EVENT",
+        "DOCUMENT",
+        "OTHER",
+    ]
+
+    for ev_type in approved_types:
+        res = await client.post(
+            f"/api/v1/incidents/{inc.id}/evidence",
+            json={
+                "evidence_type": ev_type,
+                "source": "automated-pipeline",
+                "title": f"Artifact for {ev_type}",
+                "content": f"Sample payload content for {ev_type}",
+                "reliability": "HIGH",
+            },
+            headers=auth_headers_for(admin),
+        )
+        assert res.status_code == 201, f"Failed to ingest evidence type {ev_type}: {res.text}"
+        assert res.json()["evidence_type"] == ev_type
+        assert res.json()["evidence_hash"] is not None
+
+    # Verify invalid evidence type is rejected by Pydantic validation (422)
+    res_invalid = await client.post(
+        f"/api/v1/incidents/{inc.id}/evidence",
+        json={
+            "evidence_type": "COMMUNICATION",
+            "source": "slack",
+            "title": "Slack message",
+        },
+        headers=auth_headers_for(admin),
+    )
+    assert res_invalid.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -289,14 +340,14 @@ async def test_evidence_audit_logging(
 
 @pytest.mark.asyncio
 async def test_evidence_database_constraints(db_session: AsyncSession) -> None:
-    """Verify PostgreSQL check constraints and unique hash per tenant."""
+    """Verify PostgreSQL check constraints and unique hash per tenant for all approved types."""
     org = await create_test_organization(db_session)
     svc = await create_test_service(db_session, org.id)
     inc = await create_test_incident(db_session, org.id, svc.id)
     org_id = org.id
     inc_id = inc.id
 
-    # 1. Check constraint: invalid evidence_type rejected
+    # 1. Check constraint: invalid evidence_type rejected at DB level
     ev_bad_type = Evidence(
         organization_id=org_id,
         incident_id=inc_id,
@@ -310,7 +361,20 @@ async def test_evidence_database_constraints(db_session: AsyncSession) -> None:
         await db_session.commit()
     await db_session.rollback()
 
-    # 2. Check constraint: invalid reliability rejected
+    # 2. Check constraint: all 9 approved evidence types are accepted at DB level
+    for ev_type in ["LOG", "METRIC", "TRACE", "ALERT", "DEPLOYMENT", "CONFIG", "EVENT", "DOCUMENT", "OTHER"]:
+        ev_valid = Evidence(
+            organization_id=org_id,
+            incident_id=inc_id,
+            evidence_type=ev_type,
+            source="test",
+            title=f"Valid {ev_type}",
+            evidence_hash=uuid.uuid4().hex,
+        )
+        db_session.add(ev_valid)
+        await db_session.commit()
+
+    # 3. Check constraint: invalid reliability rejected
     ev_bad_rel = Evidence(
         organization_id=org_id,
         incident_id=inc_id,
@@ -325,7 +389,7 @@ async def test_evidence_database_constraints(db_session: AsyncSession) -> None:
         await db_session.commit()
     await db_session.rollback()
 
-    # 3. Unique constraint: duplicate hash in same tenant rejected at DB level
+    # 4. Unique constraint: duplicate hash in same tenant rejected at DB level
     dup_hash = uuid.uuid4().hex
     ev1 = Evidence(
         organization_id=org_id,

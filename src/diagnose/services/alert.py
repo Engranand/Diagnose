@@ -6,9 +6,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Sequence
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from diagnose.domain.alerts import AlertSeverity, AlertStatus
+from diagnose.domain.alerts import AlertSeverity, AlertStatus, should_escalate_severity
 from diagnose.domain.exceptions import ConflictError, EntityNotFound
 from diagnose.models.alert import Alert
 from diagnose.repositories.alert import AlertRepository
@@ -44,21 +45,27 @@ class AlertService:
     ) -> tuple[Alert, bool]:
         """Idempotently ingest an alert signal within the tenant.
 
+        - Active alert with status == 'FIRING' and same fingerprint:
+          Deduplicates, updates last_seen_at and escalates severity, returning HTTP 200 (is_created=False).
+        - No active alert (or prior alerts are RESOLVED/SUPPRESSED):
+          Creates a new alert occurrence with HTTP 201 (is_created=True).
+
         Returns:
             tuple[Alert, bool]: The alert instance and a boolean indicating if it was newly created.
         """
         now = datetime.now(timezone.utc)
 
-        # Check for existing alert with identical fingerprint in this tenant
+        # Check for active (FIRING) alert with identical fingerprint in this tenant
         existing = await self.alert_repo.get_by_fingerprint(
             session,
             organization_id=organization_id,
             fingerprint=data.fingerprint,
+            status=AlertStatus.FIRING.value,
             for_update=True,
         )
 
         if existing is not None:
-            # Idempotent update of active/recurring alert
+            # Case A: Active FIRING alert exists -> Idempotent deduplication
             old_values = {
                 "last_seen_at": existing.last_seen_at.isoformat() if existing.last_seen_at else None,
                 "severity": existing.severity,
@@ -70,10 +77,10 @@ class AlertService:
                 existing.message = data.message
             if data.payload is not None:
                 existing.payload = data.payload
-            if data.severity is not None:
-                existing.severity = data.severity.value
             if data.title is not None:
                 existing.title = data.title
+            if data.severity is not None and should_escalate_severity(existing.severity, data.severity):
+                existing.severity = data.severity.value
 
             new_values = {
                 "last_seen_at": existing.last_seen_at.isoformat(),
@@ -99,7 +106,8 @@ class AlertService:
             await session.refresh(existing)
             return existing, False
 
-        # Brand new alert: validate service
+        # Case B & C: No active FIRING alert found (all previous occurrences are RESOLVED/SUPPRESSED, or none exist).
+        # Validate service belongs to tenant
         service = await self.service_repo.get_by_id(
             session, organization_id=organization_id, service_id=data.service_id
         )
@@ -128,12 +136,64 @@ class AlertService:
             title=data.title,
             message=data.message,
             severity=data.severity.value,
-            status=data.status.value,
+            status=AlertStatus.FIRING.value,
             payload=data.payload,
             first_seen_at=now,
             last_seen_at=now,
         )
-        await self.alert_repo.create_alert(session, alert)
+
+        try:
+            async with session.begin_nested():
+                await self.alert_repo.create_alert(session, alert)
+        except IntegrityError:
+            # Concurrent race condition: another transaction created an active alert with this fingerprint.
+            # Rollback to savepoint is automatic; retrieve the winner's active alert and deduplicate.
+            concurrent_active = await self.alert_repo.get_by_fingerprint(
+                session,
+                organization_id=organization_id,
+                fingerprint=data.fingerprint,
+                status=AlertStatus.FIRING.value,
+                for_update=True,
+            )
+            if concurrent_active is not None:
+                old_values = {
+                    "last_seen_at": concurrent_active.last_seen_at.isoformat() if concurrent_active.last_seen_at else None,
+                    "severity": concurrent_active.severity,
+                    "title": concurrent_active.title,
+                    "status": concurrent_active.status,
+                }
+                concurrent_active.last_seen_at = now
+                if data.message is not None:
+                    concurrent_active.message = data.message
+                if data.payload is not None:
+                    concurrent_active.payload = data.payload
+                if data.title is not None:
+                    concurrent_active.title = data.title
+                if data.severity is not None and should_escalate_severity(concurrent_active.severity, data.severity):
+                    concurrent_active.severity = data.severity.value
+
+                new_values = {
+                    "last_seen_at": concurrent_active.last_seen_at.isoformat(),
+                    "severity": concurrent_active.severity,
+                    "title": concurrent_active.title,
+                    "status": concurrent_active.status,
+                }
+                await self.audit_service.record(
+                    session=session,
+                    organization_id=organization_id,
+                    actor_user_id=actor_user_id,
+                    action="ALERT_UPDATED",
+                    entity_type="alert",
+                    entity_id=concurrent_active.id,
+                    old_values=old_values,
+                    new_values=new_values,
+                    correlation_id=correlation_id,
+                    ip_address=ip_address,
+                )
+                await session.commit()
+                await session.refresh(concurrent_active)
+                return concurrent_active, False
+            raise
 
         await self.audit_service.record(
             session=session,
@@ -229,6 +289,8 @@ class AlertService:
             alert.status = data.status.value
             if data.status == AlertStatus.RESOLVED:
                 alert.resolved_at = datetime.now(timezone.utc)
+            elif data.status == AlertStatus.FIRING:
+                alert.resolved_at = None
         if data.severity is not None:
             alert.severity = data.severity.value
         if data.title is not None:
