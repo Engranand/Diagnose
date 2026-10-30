@@ -9,7 +9,10 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from diagnose.core.security import create_access_token, hash_password
+from diagnose.domain.evidence import compute_evidence_hash
 from diagnose.domain.roles import Role
+from diagnose.models.alert import Alert
+from diagnose.models.evidence import Evidence
 from diagnose.models.incident import Incident
 from diagnose.models.organization import Organization
 from diagnose.models.service import Service
@@ -134,3 +137,81 @@ async def create_test_incident(
     await session.commit()
     await session.refresh(incident)
     return incident
+
+
+async def create_test_alert(
+    session: AsyncSession,
+    organization_id: UUID,
+    service_id: UUID,
+    incident_id: UUID | None = None,
+    fingerprint: str | None = None,
+    source: str = "datadog",
+    alert_type: str = "latency",
+    title: str | None = None,
+    severity: str = "MEDIUM",
+    status: str = "FIRING",
+    payload: dict | None = None,
+) -> Alert:
+    """Create and persist an alert for tests."""
+    uid = uuid.uuid4().hex[:8]
+    alert = Alert(
+        organization_id=organization_id,
+        service_id=service_id,
+        incident_id=incident_id,
+        fingerprint=fingerprint or f"fp-{uid}",
+        source=source,
+        alert_type=alert_type,
+        title=title or f"Test Alert {uid}",
+        message=f"Alert message {uid}",
+        severity=severity,
+        status=status,
+        payload=payload or {"metric": "latency_p99", "value": 1500},
+    )
+    session.add(alert)
+    await session.commit()
+    await session.refresh(alert)
+    return alert
+
+
+async def create_test_evidence(
+    session: AsyncSession,
+    organization_id: UUID,
+    incident_id: UUID,
+    evidence_type: str = "LOG",
+    source: str = "cloudwatch",
+    title: str | None = None,
+    content: str | None = "Error: connection timed out",
+    structured_data: dict | None = None,
+    observed_at = None,
+    collected_by_user_id: UUID | None = None,
+    reliability: str = "HIGH",
+    metadata: dict | None = None,
+) -> Evidence:
+    """Create and persist an evidence artifact for tests."""
+    uid = uuid.uuid4().hex[:8]
+    ev_hash = compute_evidence_hash(
+        incident_id=incident_id,
+        evidence_type=evidence_type,
+        source=source,
+        content=content,
+        structured_data=structured_data,
+        observed_at=observed_at,
+    )
+    evidence = Evidence(
+        organization_id=organization_id,
+        incident_id=incident_id,
+        evidence_type=evidence_type,
+        source=source,
+        title=title or f"Test Evidence {uid}",
+        content=content,
+        structured_data=structured_data,
+        observed_at=observed_at,
+        collected_by_user_id=collected_by_user_id,
+        reliability=reliability,
+        evidence_metadata=metadata,
+        evidence_hash=ev_hash,
+    )
+    session.add(evidence)
+    await session.commit()
+    await session.refresh(evidence)
+    return evidence

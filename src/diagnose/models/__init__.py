@@ -1,7 +1,9 @@
 """SQLAlchemy ORM models."""
 
+from diagnose.models.alert import Alert
 from diagnose.models.audit_log import AuditLog
 from diagnose.models.base import Base, TimestampMixin
+from diagnose.models.evidence import Evidence
 from diagnose.models.incident import Incident
 from diagnose.models.incident_event import IncidentEvent
 from diagnose.models.organization import Organization
@@ -16,5 +18,7 @@ __all__ = [
     "Service",
     "Incident",
     "IncidentEvent",
+    "Alert",
+    "Evidence",
     "AuditLog",
 ]

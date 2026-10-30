@@ -22,6 +22,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from diagnose.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from diagnose.models.alert import Alert
+    from diagnose.models.evidence import Evidence
     from diagnose.models.incident_event import IncidentEvent
     from diagnose.models.organization import Organization
     from diagnose.models.service import Service
@@ -136,4 +138,14 @@ class Incident(Base, TimestampMixin):
         back_populates="incident",
         cascade="all, delete-orphan",
         order_by="IncidentEvent.created_at.asc()",
+    )
+    alerts: Mapped[list[Alert]] = relationship(
+        "Alert",
+        back_populates="incident",
+    )
+    evidence_items: Mapped[list[Evidence]] = relationship(
+        "Evidence",
+        back_populates="incident",
+        cascade="all, delete-orphan",
+        order_by="Evidence.created_at.asc()",
     )

@@ -12,6 +12,7 @@ from diagnose.domain.roles import Role
 from diagnose.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from diagnose.models.evidence import Evidence
     from diagnose.models.incident import Incident
     from diagnose.models.incident_event import IncidentEvent
     from diagnose.models.organization import Organization
@@ -76,4 +77,8 @@ class User(Base, TimestampMixin):
     incident_events: Mapped[list[IncidentEvent]] = relationship(
         "IncidentEvent",
         back_populates="actor_user",
+    )
+    collected_evidence: Mapped[list[Evidence]] = relationship(
+        "Evidence",
+        back_populates="collected_by_user",
     )

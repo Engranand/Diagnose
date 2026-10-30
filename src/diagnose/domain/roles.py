@@ -31,6 +31,10 @@ class Permission(StrEnum):
     MANAGE_SERVICES = "manage:services"
     VIEW_INCIDENTS = "view:incidents"
     VIEW_AUDIT_LOGS = "view:audit_logs"
+    MANAGE_ALERTS = "manage:alerts"
+    VIEW_ALERTS = "view:alerts"
+    ASSOCIATE_ALERT = "associate:alert"
+    VIEW_EVIDENCE = "view:evidence"
 
 
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
@@ -45,6 +49,10 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.MANAGE_SERVICES,
         Permission.VIEW_INCIDENTS,
         Permission.VIEW_AUDIT_LOGS,
+        Permission.MANAGE_ALERTS,
+        Permission.VIEW_ALERTS,
+        Permission.ASSOCIATE_ALERT,
+        Permission.VIEW_EVIDENCE,
     },
     Role.ENGINEER: {
         Permission.CREATE_INCIDENT,
@@ -54,6 +62,10 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.ADD_EVIDENCE,
         Permission.MANAGE_SERVICES,
         Permission.VIEW_INCIDENTS,
+        Permission.MANAGE_ALERTS,
+        Permission.VIEW_ALERTS,
+        Permission.ASSOCIATE_ALERT,
+        Permission.VIEW_EVIDENCE,
     },
     Role.RESPONDER: {
         Permission.CREATE_INCIDENT,
@@ -62,9 +74,14 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.CLOSE_INCIDENT,
         Permission.ADD_EVIDENCE,
         Permission.VIEW_INCIDENTS,
+        Permission.VIEW_ALERTS,
+        Permission.ASSOCIATE_ALERT,
+        Permission.VIEW_EVIDENCE,
     },
     Role.VIEWER: {
         Permission.VIEW_INCIDENTS,
+        Permission.VIEW_ALERTS,
+        Permission.VIEW_EVIDENCE,
     },
 }
 
