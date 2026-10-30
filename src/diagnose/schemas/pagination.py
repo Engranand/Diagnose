@@ -8,6 +8,8 @@ from typing import Generic, TypeVar
 from fastapi import Query
 from pydantic import BaseModel, Field
 
+from diagnose.domain.exceptions import ValidationError
+
 T = TypeVar("T")
 
 
@@ -39,26 +41,24 @@ class PaginationParams:
             description="Number of items per page (max 100)",
         ),
     ) -> None:
-        # Determine limit / page_size
-        if page_size is not None:
-            self.limit = page_size
-        elif limit is not None:
-            self.limit = limit
-        else:
-            self.limit = 50
+        has_offset_mode = limit is not None or offset is not None
+        has_page_mode = page is not None or page_size is not None
 
-        # Determine offset / page
-        if page is not None:
-            self.offset = (page - 1) * self.limit
-            self.page = page
-        elif offset is not None:
-            self.offset = offset
+        if has_offset_mode and has_page_mode:
+            raise ValidationError(
+                "Mixed pagination parameters: choose either (limit, offset) or (page, page_size), not both."
+            )
+
+        if has_page_mode:
+            self.page_size = page_size if page_size is not None else 50
+            self.page = page if page is not None else 1
+            self.limit = self.page_size
+            self.offset = (self.page - 1) * self.page_size
+        else:
+            self.limit = limit if limit is not None else 50
+            self.offset = offset if offset is not None else 0
             self.page = (self.offset // self.limit) + 1
-        else:
-            self.offset = 0
-            self.page = 1
-
-        self.page_size = self.limit
+            self.page_size = self.limit
 
     def calculate_pages(self, total: int) -> int:
         """Compute the total number of pages for a given item count."""

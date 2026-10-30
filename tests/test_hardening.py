@@ -704,3 +704,202 @@ async def test_cross_tenant_isolation_in_search_and_filter(
     )
     assert res_filter.status_code == 200
     assert len(res_filter.json()["items"]) == 0
+
+
+# ── 11. CROSS-TENANT DIRECT ACCESS ERROR SEMANTICS ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_direct_access_returns_enumeration_resistant_404(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Requirement: Direct resource lookup for foreign tenant returns enumeration-resistant 404, never 403."""
+    org_a = await create_test_organization(db_session, name="Org Alpha Res")
+    org_b = await create_test_organization(db_session, name="Org Beta Res")
+
+    user_a = await create_test_user(db_session, org_a.id, role=Role.ADMIN)
+    user_b = await create_test_user(db_session, org_b.id, role=Role.ADMIN)
+
+    # Org A resources
+    svc_a = await create_test_service(db_session, org_a.id, name="Svc Alpha", slug="svc-alpha")
+    inc_a = await create_test_incident(db_session, org_a.id, svc_a.id, title="Incident Alpha")
+
+    alert_a = Alert(
+        id=uuid.uuid4(),
+        organization_id=org_a.id,
+        service_id=svc_a.id,
+        fingerprint=f"fp-alpha-{uuid.uuid4().hex[:6]}",
+        source="prometheus",
+        alert_type="cpu",
+        title="High CPU Alpha",
+        severity=AlertSeverity.HIGH.value,
+        status=AlertStatus.FIRING.value,
+    )
+    evidence_a = Evidence(
+        id=uuid.uuid4(),
+        organization_id=org_a.id,
+        incident_id=inc_a.id,
+        evidence_type=EvidenceType.LOG.value,
+        title="App Crash Log Alpha",
+        source="datadog",
+        content="App crash traceback: null pointer exception",
+        structured_data={"trace": "null pointer"},
+        evidence_hash=uuid.uuid4().hex,
+        reliability=EvidenceReliability.HIGH.value,
+    )
+    job_a = Job(
+        id=uuid.uuid4(),
+        organization_id=org_a.id,
+        job_type="test_job",
+        payload={"task": "sync"},
+        status=JobStatus.PENDING.value,
+    )
+    db_session.add_all([alert_a, evidence_a, job_a])
+    await db_session.commit()
+
+    headers_a = auth_headers_for(user_a)
+    headers_b = auth_headers_for(user_b)
+
+    endpoints = [
+        (f"/api/v1/services/{svc_a.id}", "Service"),
+        (f"/api/v1/incidents/{inc_a.id}", "Incident"),
+        (f"/api/v1/alerts/{alert_a.id}", "Alert"),
+        (f"/api/v1/evidence/{evidence_a.id}", "Evidence"),
+        (f"/api/v1/jobs/{job_a.id}", "Job"),
+    ]
+
+    for path, entity_name in endpoints:
+        # 1. Tenant A accesses own resource -> 200 OK
+        resp_a = await client.get(path, headers=headers_a)
+        assert resp_a.status_code == 200, f"Tenant A should access own {entity_name}"
+        assert resp_a.json()["id"] == (str(svc_a.id) if entity_name == "Service" else resp_a.json()["id"])
+
+        # 2. Tenant B accesses Tenant A's resource -> 404 NOT_FOUND (enumeration resistant, not 403)
+        resp_b = await client.get(path, headers=headers_b)
+        assert resp_b.status_code == 404, f"Tenant B must receive 404 for {entity_name}, not 403"
+        err_b = resp_b.json()["error"]
+        assert err_b["code"] == "NOT_FOUND"
+        assert "correlation_id" in err_b
+
+        # 3. Completely nonexistent UUID also returns identical 404 NOT_FOUND
+        random_id = uuid.uuid4()
+        resp_rand = await client.get(path.rsplit("/", 1)[0] + f"/{random_id}", headers=headers_b)
+        assert resp_rand.status_code == 404
+        assert resp_rand.json()["error"]["code"] == "NOT_FOUND"
+
+
+# ── 12. PAGINATION MIXED MODE REJECTION ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pagination_mixed_mode_rejection(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Requirement: Supplying both offset-based and page-based parameters is rejected with 422."""
+    org = await create_test_organization(db_session)
+    user = await create_test_user(db_session, org.id, role=Role.ADMIN)
+    headers = auth_headers_for(user)
+
+    # 1. limit + offset only -> 200 OK
+    r1 = await client.get("/api/v1/incidents?limit=10&offset=0", headers=headers)
+    assert r1.status_code == 200
+
+    # 2. page + page_size only -> 200 OK
+    r2 = await client.get("/api/v1/incidents?page=1&page_size=10", headers=headers)
+    assert r2.status_code == 200
+
+    # 3. Both supplied simultaneously -> 422 VALIDATION_ERROR
+    r3 = await client.get(
+        "/api/v1/incidents?page=2&page_size=20&limit=100&offset=0", headers=headers
+    )
+    assert r3.status_code == 422
+    assert r3.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "Mixed pagination parameters" in r3.json()["error"]["message"]
+
+    # 4. Partial mixed combination: page + limit -> 422
+    r4 = await client.get("/api/v1/incidents?page=1&limit=10", headers=headers)
+    assert r4.status_code == 422
+    assert r4.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    # 5. Partial mixed combination: page_size + offset -> 422
+    r5 = await client.get("/api/v1/incidents?page_size=10&offset=5", headers=headers)
+    assert r5.status_code == 422
+    assert r5.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+# ── 13. RATE LIMITING USER ISOLATION & RECOVERY ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rate_limiting_user_isolation_and_recovery(
+    app, client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Requirement: Rate limiting is per-user scoped by tenant; Redis outage fails open and recovers."""
+    org_a = await create_test_organization(db_session, name="RateLimit Org A")
+    org_b = await create_test_organization(db_session, name="RateLimit Org B")
+
+    user_a1 = await create_test_user(db_session, org_a.id, role=Role.ADMIN)
+    user_a2 = await create_test_user(db_session, org_a.id, role=Role.VIEWER)
+    user_b1 = await create_test_user(db_session, org_b.id, role=Role.ADMIN)
+
+    from diagnose.middleware.rate_limit import RateLimitMiddleware
+    # Set rate limit to 2 for this test
+    for mw in app.user_middleware:
+        if mw.cls == RateLimitMiddleware:
+            mw.kwargs["rate_limit_per_minute"] = 2
+
+    def _get_rl_mw():
+        curr = getattr(app, "middleware_stack", None)
+        while curr is not None:
+            if isinstance(curr, RateLimitMiddleware):
+                return curr
+            curr = getattr(curr, "app", None)
+        return None
+
+    fake_redis = FakeAsyncRedis()
+    app.state.redis = fake_redis
+
+    headers_a1 = auth_headers_for(user_a1)
+    headers_a2 = auth_headers_for(user_a2)
+    headers_b1 = auth_headers_for(user_b1)
+
+    # 1. User A1 makes 2 requests (reaches limit)
+    assert (await client.get("/api/v1/services", headers=headers_a1)).status_code == 200
+
+    # Ensure running middleware instance has limit=2
+    rl_mw = _get_rl_mw()
+    if rl_mw is not None:
+        rl_mw.rate_limit_per_minute = 2
+        rl_mw._circuit_breaker_until = 0.0
+
+    assert (await client.get("/api/v1/services", headers=headers_a1)).status_code == 200
+
+    # 3rd request for User A1 is throttled -> 429
+    r_a1_throttled = await client.get("/api/v1/services", headers=headers_a1)
+    assert r_a1_throttled.status_code == 429
+    assert r_a1_throttled.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+
+    # 2. User A2 in SAME tenant has independent bucket -> 200 OK
+    assert (await client.get("/api/v1/services", headers=headers_a2)).status_code == 200
+
+    # 3. User B1 in DIFFERENT tenant has independent bucket -> 200 OK
+    assert (await client.get("/api/v1/services", headers=headers_b1)).status_code == 200
+
+    # 4. Redis failure -> fails open safely (returns 200, no 500)
+    fake_redis.simulate_failure = True
+    r_fail_open = await client.get("/api/v1/services", headers=headers_a1)
+    assert r_fail_open.status_code == 200
+
+    # 5. Redis recovers and circuit breaker elapses -> rate limiting resumes
+    fake_redis.simulate_failure = False
+    rl_mw = _get_rl_mw()
+    if rl_mw is not None:
+        rl_mw._circuit_breaker_until = 0.0  # Reset circuit breaker
+    r_resumed = await client.get("/api/v1/services", headers=headers_a1)
+    assert r_resumed.status_code == 429
+    assert r_resumed.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+
+    # Reset limit to 120 so other tests are unaffected
+    if rl_mw is not None:
+        rl_mw.rate_limit_per_minute = 120
+

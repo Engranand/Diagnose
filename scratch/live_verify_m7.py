@@ -199,6 +199,13 @@ async def main() -> None:
         )
         headers_a = {"Authorization": f"Bearer {token_a}"}
 
+        token_b = create_access_token(
+            user_id=foreign_user.id,
+            organization_id=org_b.id,
+            role=Role.ADMIN.value,
+        )
+        headers_b = {"Authorization": f"Bearer {token_b}"}
+
         print("\n--- 1. PAGINATED INCIDENT LIST ---")
         r_page = await client.get("/api/v1/incidents?page=1&page_size=1", headers=headers_a)
         assert r_page.status_code == 200
@@ -261,13 +268,21 @@ async def main() -> None:
         assert r_inv_date.json()["error"]["code"] == "VALIDATION_ERROR"
         print(f"[OK] Invalid date range safely rejected with 422: {r_inv_date.json()['error']['message']}")
 
-        print("\n--- 9. OVERSIZED PAGINATION RETURNS 422 ---")
+        print("\n--- 9. OVERSIZED & MIXED PAGINATION RETURNS 422 ---")
         r_inv_page = await client.get("/api/v1/incidents?page_size=200", headers=headers_a)
         assert r_inv_page.status_code == 422
         assert r_inv_page.json()["error"]["code"] == "VALIDATION_ERROR"
         print("[OK] Page size > 100 rejected with 422")
 
-        print("\n--- 10 & 11. RATE LIMITING & RETRY-AFTER ---")
+        r_mixed_page = await client.get(
+            "/api/v1/incidents?page=2&page_size=20&limit=100&offset=0", headers=headers_a
+        )
+        assert r_mixed_page.status_code == 422
+        assert r_mixed_page.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert "Mixed pagination parameters" in r_mixed_page.json()["error"]["message"]
+        print("[OK] Mixed pagination (page + offset modes simultaneously) safely rejected with 422 VALIDATION_ERROR")
+
+        print("\n--- 10 & 11. RATE LIMITING, USER ISOLATION & RETRY-AFTER ---")
         from diagnose.middleware.rate_limit import RateLimitMiddleware
         # Set rate limit to 3 on both user_middleware and the running ASGI middleware instance
         for mw in app.user_middleware:
@@ -277,10 +292,11 @@ async def main() -> None:
         while curr is not None:
             if isinstance(curr, RateLimitMiddleware):
                 curr.rate_limit_per_minute = 3
+                curr._circuit_breaker_until = 0.0
                 break
             curr = getattr(curr, "app", None)
 
-        # Make 4 rapid requests to trigger 429
+        # Make 4 rapid requests with User A to trigger 429
         responses = [await client.get("/api/v1/services", headers=headers_a) for _ in range(4)]
         last_resp = responses[-1]
         assert last_resp.status_code == 429, f"Expected 429, got {last_resp.status_code}"
@@ -288,24 +304,45 @@ async def main() -> None:
         assert last_resp.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
         print(f"[OK] Rate limit exceeded returns 429 with Retry-After: {last_resp.headers['Retry-After']}s")
 
+        # Verify rate limit user isolation: foreign user (or other user) has independent bucket
+        r_foreign_bucket = await client.get("/api/v1/services", headers=headers_b)
+        assert r_foreign_bucket.status_code == 200
+        print("[OK] Rate-limiting user & tenant isolation verified: foreign user bucket is completely independent")
+
         # Reset rate limit & clear counter for subsequent checks
         if curr is not None:
             curr.rate_limit_per_minute = 120
         fake_redis._keys.clear()
 
-        print("\n--- 12 & 13. CROSS-TENANT ISOLATION (SEARCH & FILTER) ---")
+        print("\n--- 12 & 13. CROSS-TENANT ISOLATION (SEARCH, FILTER & DIRECT ACCESS) ---")
         r_foreign_search = await client.get("/api/v1/incidents?search=Confidential", headers=headers_a)
         assert len(r_foreign_search.json()["items"]) == 0
         r_foreign_filter = await client.get(f"/api/v1/incidents?service_id={svc_b.id}", headers=headers_a)
         assert len(r_foreign_filter.json()["items"]) == 0
-        print("[OK] Foreign records completely isolated: zero cross-tenant leak")
+        print("[OK] Foreign records completely isolated in search/filter: zero cross-tenant leak")
 
-        print("\n--- 14 & 15. REDIS RATE LIMITING & SAFE FAIL-OPEN ---")
+        # Direct access to foreign resources returns enumeration-resistant 404 (NOT 403)
+        r_foreign_direct_svc = await client.get(f"/api/v1/services/{svc_b.id}", headers=headers_a)
+        assert r_foreign_direct_svc.status_code == 404
+        assert r_foreign_direct_svc.json()["error"]["code"] == "NOT_FOUND"
+
+        r_foreign_direct_inc = await client.get(f"/api/v1/incidents/{inc_foreign.id}", headers=headers_a)
+        assert r_foreign_direct_inc.status_code == 404
+        assert r_foreign_direct_inc.json()["error"]["code"] == "NOT_FOUND"
+        print("[OK] Direct access to foreign resources yields enumeration-resistant 404 NOT_FOUND (never 403)")
+
+        print("\n--- 14 & 15. REDIS RATE LIMITING, FAIL-OPEN & RECOVERY ---")
         fake_redis.simulate_failure = True
         r_fail_open = await client.get("/api/v1/services", headers=headers_a)
         assert r_fail_open.status_code == 200
-        fake_redis.simulate_failure = False
         print("[OK] Safe fail-open behavior verified during Redis disruption")
+
+        fake_redis.simulate_failure = False
+        if curr is not None:
+            curr._circuit_breaker_until = 0.0
+        r_recovered = await client.get("/api/v1/services", headers=headers_a)
+        assert r_recovered.status_code == 200
+        print("[OK] Redis recovery successfully restores normal operation")
 
         print("\n--- 16 & 17. ERROR ENVELOPE CONSISTENCY & SENSITIVE DATA ABSENCE ---")
         r_404 = await client.get(f"/api/v1/services/{uuid.uuid4()}", headers=headers_a)
