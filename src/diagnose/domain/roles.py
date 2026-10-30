@@ -37,6 +37,9 @@ class Permission(StrEnum):
     VIEW_EVIDENCE = "view:evidence"
     VIEW_JOBS = "view:jobs"
     TRIGGER_JOB = "trigger:job"
+    CREATE_INVESTIGATION = "create:investigation"
+    EXECUTE_INVESTIGATION = "execute:investigation"
+    VIEW_INVESTIGATIONS = "view:investigations"
 
 
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
@@ -57,6 +60,9 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VIEW_EVIDENCE,
         Permission.VIEW_JOBS,
         Permission.TRIGGER_JOB,
+        Permission.CREATE_INVESTIGATION,
+        Permission.EXECUTE_INVESTIGATION,
+        Permission.VIEW_INVESTIGATIONS,
     },
     Role.ENGINEER: {
         Permission.CREATE_INCIDENT,
@@ -72,6 +78,9 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VIEW_EVIDENCE,
         Permission.VIEW_JOBS,
         Permission.TRIGGER_JOB,
+        Permission.CREATE_INVESTIGATION,
+        Permission.EXECUTE_INVESTIGATION,
+        Permission.VIEW_INVESTIGATIONS,
     },
     Role.RESPONDER: {
         Permission.CREATE_INCIDENT,
@@ -84,12 +93,16 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.ASSOCIATE_ALERT,
         Permission.VIEW_EVIDENCE,
         Permission.VIEW_JOBS,
+        Permission.CREATE_INVESTIGATION,
+        Permission.EXECUTE_INVESTIGATION,
+        Permission.VIEW_INVESTIGATIONS,
     },
     Role.VIEWER: {
         Permission.VIEW_INCIDENTS,
         Permission.VIEW_ALERTS,
         Permission.VIEW_EVIDENCE,
         Permission.VIEW_JOBS,
+        Permission.VIEW_INVESTIGATIONS,
     },
 }
 

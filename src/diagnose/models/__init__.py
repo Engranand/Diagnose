@@ -6,6 +6,15 @@ from diagnose.models.base import Base, TimestampMixin
 from diagnose.models.evidence import Evidence
 from diagnose.models.incident import Incident
 from diagnose.models.incident_event import IncidentEvent
+from diagnose.models.investigation import (
+    CandidateCause,
+    EvidenceCorrelation,
+    HypothesisEvidence,
+    InvestigationHypothesis,
+    InvestigationRun,
+    InvestigationStep,
+    InvestigationTimelineEvent,
+)
 from diagnose.models.job import Job
 from diagnose.models.job_effect import JobEffect
 from diagnose.models.organization import Organization
@@ -21,6 +30,13 @@ __all__ = [
     "Service",
     "Incident",
     "IncidentEvent",
+    "InvestigationRun",
+    "InvestigationStep",
+    "InvestigationTimelineEvent",
+    "EvidenceCorrelation",
+    "CandidateCause",
+    "InvestigationHypothesis",
+    "HypothesisEvidence",
     "Alert",
     "Evidence",
     "AuditLog",
