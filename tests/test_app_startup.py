@@ -31,8 +31,8 @@ def test_app_has_v1_health_route() -> None:
     )
     application = create_app(settings=settings)
 
-    route_paths = [route.path for route in application.routes]
-    assert "/api/v1/health" in route_paths
+    openapi_paths = list(application.openapi()["paths"].keys())
+    assert "/api/v1/health" in openapi_paths
 
 
 def test_app_debug_mode_enables_docs() -> None:
@@ -80,11 +80,5 @@ def test_correlation_id_middleware_registered() -> None:
     )
     application = create_app(settings=settings)
 
-    # Walk the middleware stack — the app wraps middleware as layers
-    middleware_classes = []
-    inner = application.middleware_stack
-    while inner is not None:
-        middleware_classes.append(type(inner).__name__)
-        inner = getattr(inner, "app", None)
-
-    assert "CorrelationIdMiddleware" in middleware_classes
+    middleware_names = [m.cls.__name__ for m in application.user_middleware]
+    assert "CorrelationIdMiddleware" in middleware_names

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
 import pytest
 from httpx import AsyncClient
 
@@ -9,8 +10,12 @@ from httpx import AsyncClient
 @pytest.mark.asyncio
 async def test_health_returns_200_when_services_available(
     client: AsyncClient,
+    app,
 ) -> None:
     """GET /api/v1/health returns 200 with all checks healthy."""
+    # When redis responds to ping, both postgres and redis are healthy -> 200
+    app.state.redis.ping = AsyncMock(return_value=True)
+
     response = await client.get("/api/v1/health")
 
     assert response.status_code == 200
@@ -19,6 +24,23 @@ async def test_health_returns_200_when_services_available(
     assert body["version"] == "0.1.0"
     assert body["checks"]["postgres"] == "healthy"
     assert body["checks"]["redis"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_health_returns_503_when_redis_fails(
+    client: AsyncClient,
+    app,
+) -> None:
+    """GET /api/v1/health returns 503 when Redis check fails."""
+    app.state.redis.ping = AsyncMock(side_effect=ConnectionError("Redis down"))
+
+    response = await client.get("/api/v1/health")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "unhealthy"
+    assert body["checks"]["postgres"] == "healthy"
+    assert body["checks"]["redis"] == "unhealthy"
 
 
 @pytest.mark.asyncio

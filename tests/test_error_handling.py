@@ -58,13 +58,14 @@ async def error_client(test_settings: Settings):
     """Client wired to an app with error-raising test routes."""
     from httpx import ASGITransport
 
-    application = _make_app_with_error_routes(test_settings)
+    prod_settings = test_settings.model_copy(update={"DEBUG": False})
+    application = _make_app_with_error_routes(prod_settings)
 
-    engine = create_engine(test_settings)
+    engine = create_engine(prod_settings)
     application.state.db_engine = engine
     application.state.db_session_factory = create_session_factory(engine)
     application.state.redis = aioredis.from_url(
-        test_settings.REDIS_URL, decode_responses=True
+        prod_settings.REDIS_URL, decode_responses=True
     )
 
     transport = ASGITransport(app=application)
@@ -121,11 +122,14 @@ async def test_validation_error_returns_422(
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-@pytest.mark.asyncio
-async def test_unhandled_exception_returns_500(
-    error_client: AsyncClient,
-) -> None:
-    response = await error_client.get("/test-errors/unhandled")
+def test_unhandled_exception_returns_500(test_settings: Settings) -> None:
+    from starlette.testclient import TestClient
+
+    prod_settings = test_settings.model_copy(update={"DEBUG": False})
+    application = _make_app_with_error_routes(prod_settings)
+    client = TestClient(application, raise_server_exceptions=False)
+
+    response = client.get("/test-errors/unhandled")
     assert response.status_code == 500
     body = response.json()
     assert body["error"]["code"] == "INTERNAL_ERROR"

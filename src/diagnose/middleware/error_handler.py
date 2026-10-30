@@ -85,7 +85,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: DomainValidationError
     ) -> JSONResponse:
         return _error_response(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            422,
             "VALIDATION_ERROR",
             str(exc),
         )
@@ -98,6 +98,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
             status.HTTP_400_BAD_REQUEST, "DOMAIN_ERROR", str(exc)
         )
 
+    @app.exception_handler(500)
     @app.exception_handler(Exception)
     async def _unhandled(
         _request: Request, exc: Exception
