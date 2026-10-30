@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from diagnose.core.security import create_access_token, hash_password
 from diagnose.domain.roles import Role
 from diagnose.models.organization import Organization
+from diagnose.models.service import Service
 from diagnose.models.user import User
 
 
@@ -71,3 +72,28 @@ def auth_headers_for(user: User) -> dict[str, str]:
     """Return HTTP Authorization header for the user."""
     token = auth_token_for(user)
     return {"Authorization": f"Bearer {token}"}
+
+
+async def create_test_service(
+    session: AsyncSession,
+    organization_id: UUID,
+    name: str | None = None,
+    slug: str | None = None,
+    tier: str = "MEDIUM",
+    is_active: bool = True,
+    description: str | None = "Test service description",
+) -> Service:
+    """Create and persist a service for tests."""
+    uid = uuid.uuid4().hex[:8]
+    service = Service(
+        organization_id=organization_id,
+        name=name or f"Test Service {uid}",
+        slug=slug or f"service-{uid}",
+        description=description,
+        tier=tier,
+        is_active=is_active,
+    )
+    session.add(service)
+    await session.commit()
+    await session.refresh(service)
+    return service

@@ -1,4 +1,5 @@
 import asyncio
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -21,8 +22,12 @@ target_metadata = Base.metadata
 
 
 def _get_database_url() -> str:
-    """Resolve the database URL from application settings (env vars / .env)."""
-    return get_settings().DATABASE_URL
+    """Resolve the database URL from env vars or application settings."""
+    return (
+        os.environ.get("DIAGNOSE_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or get_settings().DATABASE_URL
+    )
 
 
 def run_migrations_offline() -> None:

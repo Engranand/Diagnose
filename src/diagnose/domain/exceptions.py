@@ -41,6 +41,10 @@ class EntityNotFound(DomainException):
         super().__init__(msg)
 
 
+# Convenient alias
+NotFoundError = EntityNotFound
+
+
 class InvalidStateTransition(DomainException):
     """Raised when an entity state-machine transition is not allowed."""
 

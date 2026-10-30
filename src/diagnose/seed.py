@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from diagnose.core.security import hash_password
 from diagnose.db.session import create_engine, create_session_factory
 from diagnose.domain.roles import Role
+from diagnose.domain.services import ServiceTier
 from diagnose.models.organization import Organization
+from diagnose.models.service import Service
 from diagnose.models.user import User
 from diagnose.settings import get_settings
 
@@ -25,6 +27,41 @@ class DemoUserSpec(NamedTuple):
     password: str
     role: Role
     full_name: str
+
+
+class DemoServiceSpec(NamedTuple):
+    name: str
+    slug: str
+    description: str
+    tier: ServiceTier
+
+
+DEMO_SERVICES: list[DemoServiceSpec] = [
+    DemoServiceSpec(
+        name="Payment Gateway API",
+        slug="payment-api",
+        description="Processes inbound and outbound credit card & ACH transactions",
+        tier=ServiceTier.CRITICAL,
+    ),
+    DemoServiceSpec(
+        name="Authentication Service",
+        slug="auth-service",
+        description="Provides identity, token generation, and single sign-on",
+        tier=ServiceTier.CRITICAL,
+    ),
+    DemoServiceSpec(
+        name="Frontend Web Application",
+        slug="frontend-web",
+        description="Primary customer web dashboard and user portal",
+        tier=ServiceTier.HIGH,
+    ),
+    DemoServiceSpec(
+        name="Notification Service",
+        slug="notification-service",
+        description="Delivers transactional emails, SMS, and webhook alerts",
+        tier=ServiceTier.MEDIUM,
+    ),
+]
 
 
 DEMO_USERS: list[DemoUserSpec] = [
@@ -91,6 +128,28 @@ async def seed_development_data(session: AsyncSession) -> Organization:
             print(f"[Seed] Created User: {spec.email} [{spec.role.value}]")
         else:
             print(f"[Seed] User already exists: {spec.email}")
+
+    # 3. Seed Services
+    for svc_spec in DEMO_SERVICES:
+        svc_stmt = select(Service).where(
+            Service.organization_id == org.id, Service.slug == svc_spec.slug
+        )
+        svc_result = await session.execute(svc_stmt)
+        svc = svc_result.scalar_one_or_none()
+
+        if svc is None:
+            svc = Service(
+                organization_id=org.id,
+                name=svc_spec.name,
+                slug=svc_spec.slug,
+                description=svc_spec.description,
+                tier=svc_spec.tier.value,
+                is_active=True,
+            )
+            session.add(svc)
+            print(f"[Seed] Created Service: {svc_spec.slug} [{svc_spec.tier.value}]")
+        else:
+            print(f"[Seed] Service already exists: {svc_spec.slug}")
 
     await session.commit()
     print("[Seed] Seeding completed successfully.")
