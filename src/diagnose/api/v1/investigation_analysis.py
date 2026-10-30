@@ -100,7 +100,7 @@ async def get_investigation_analysis_by_id(
     "/{investigation_id}/analysis/refresh",
     response_model=InvestigationAnalysisResponse,
     status_code=status.HTTP_200_OK,
-    summary="Force refresh an LLM investigation analysis",
+    summary="Refresh an LLM investigation analysis when context has materially changed",
 )
 async def refresh_investigation_analysis(
     investigation_id: UUID,
@@ -109,8 +109,20 @@ async def refresh_investigation_analysis(
     session: AsyncSession = Depends(get_db),
     correlation_id: str | None = Depends(get_correlation_id),
 ) -> InvestigationAnalysisResponse:
-    """Force execution of a fresh LLM analysis bypassing cached input hash."""
+    """Refresh LLM analysis only when investigation context or model/prompt version has materially changed."""
     service = InvestigationAnalysisService()
+    # Check whether investigation context or model/prompt has materially changed
+    context = await service.build_context(session, org_id, investigation_id)
+    provider = service._get_provider()
+    current_hash = context.compute_input_hash(
+        provider.provider_name, provider.model_name
+    )
+    latest = await service.analysis_repo.get_latest_completed(
+        session, org_id, investigation_id
+    )
+    if latest is not None and latest.input_hash == current_hash:
+        return InvestigationAnalysisResponse.model_validate(latest)
+
     analysis = await service.execute_analysis(
         session=session,
         organization_id=org_id,

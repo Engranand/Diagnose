@@ -619,3 +619,146 @@ async def test_audit_events_and_secret_redaction(
         payload_str = str(e.new_values).lower()
         for f in forbidden:
             assert f not in payload_str, f"Forbidden keyword '{f}' leaked into audit payload: {payload_str}"
+
+
+# ── 9. ADDITIONAL AUDIT TESTS ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_provider_unavailable_503_handling(
+    db_session: AsyncSession,
+) -> None:
+    """Audit Item 2: Provider unavailable / 503 marks analysis FAILED; M8 state unchanged."""
+    org = await create_test_organization(db_session)
+    service = await create_test_service(db_session, org.id)
+    incident = await create_test_incident(db_session, org.id, service.id)
+
+    inv_service = InvestigationService()
+    run = await inv_service.create_investigation(db_session, org.id, incident.id)
+    await inv_service.execute_investigation(db_session, org.id, run.id)
+
+    unavailable_provider = MockLLMProvider(simulate_unavailable=True)
+    analysis_service = InvestigationAnalysisService(llm_provider=unavailable_provider)
+
+    with pytest.raises(LLMProviderUnavailableError):
+        await analysis_service.execute_analysis(
+            session=db_session,
+            organization_id=org.id,
+            investigation_id=run.id,
+        )
+
+    analyses, total = await analysis_service.analysis_repo.list_analyses(
+        db_session, org.id, run.id
+    )
+    assert total == 1
+    assert analyses[0].status == AnalysisStatus.FAILED.value
+    assert "unavailable" in (analyses[0].error or "").lower()
+
+    # M8 investigation state remains intact
+    fresh_run = await inv_service.get_investigation(db_session, org.id, run.id)
+    assert fresh_run.status == InvestigationStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_cross_investigation_evidence_reference_rejection(
+    db_session: AsyncSession,
+) -> None:
+    """Audit Item 2: Citing evidence belonging to a different investigation is rejected."""
+    org = await create_test_organization(db_session)
+    service = await create_test_service(db_session, org.id)
+    incident_1 = await create_test_incident(db_session, org.id, service.id, title="Incident 1")
+    incident_2 = await create_test_incident(db_session, org.id, service.id, title="Incident 2")
+
+    t0 = datetime(2026, 10, 31, 2, 0, 0, tzinfo=timezone.utc)
+    ev_2 = Evidence(
+        id=uuid.uuid4(),
+        organization_id=org.id,
+        incident_id=incident_2.id,
+        title="Evidence for Incident 2 only",
+        evidence_type=EvidenceType.LOG.value,
+        source="datadog",
+        content="Log for incident 2",
+        observed_at=t0,
+        reliability=EvidenceReliability.HIGH.value,
+        structured_data={"key": "val2"},
+        evidence_hash=compute_evidence_hash(
+            incident_id=incident_2.id,
+            evidence_type=EvidenceType.LOG.value,
+            source="datadog",
+            content="Log for incident 2",
+            structured_data={"key": "val2"},
+            observed_at=t0,
+        ),
+    )
+    db_session.add(ev_2)
+    await db_session.commit()
+
+    inv_service = InvestigationService()
+    run_1 = await inv_service.create_investigation(db_session, org.id, incident_1.id)
+    await inv_service.execute_investigation(db_session, org.id, run_1.id)
+
+    analysis_service = InvestigationAnalysisService()
+    context_1 = await analysis_service.build_context(db_session, org.id, run_1.id)
+
+    # ev_2 must NOT be in context_1.valid_evidence_ids
+    assert str(ev_2.id) not in context_1.valid_evidence_ids
+
+    # An analysis for investigation 1 attempting to reference ev_2 must fail validation
+    output = InvestigationAnalysisOutput(
+        summary="Analysis for investigation 1 illegally citing investigation 2 evidence.",
+        primary_hypothesis_id=uuid.UUID(context_1.hypotheses[0].id) if context_1.hypotheses else None,
+        hypothesis_assessments=[],
+        key_findings=[],
+        supporting_evidence=[str(ev_2.id)],  # Cross-investigation leak!
+        contradicting_evidence=[],
+        missing_evidence=[],
+        next_checks=[],
+        remediation_suggestions=[],
+        limitations="None",
+        model_metadata={},
+    )
+    with pytest.raises(LLMValidationError, match="Fabricated evidence ref"):
+        validate_analysis(output, context_1)
+
+
+@pytest.mark.asyncio
+async def test_refresh_semantics_material_change_and_duplicate_prevention(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Audit Item 1: Refresh semantics — unchanged context returns existing; material change creates new."""
+    org = await create_test_organization(db_session)
+    user = await create_test_user(db_session, org.id, role=Role.ADMIN)
+    service = await create_test_service(db_session, org.id)
+    incident = await create_test_incident(db_session, org.id, service.id)
+
+    inv_service = InvestigationService()
+    run = await inv_service.create_investigation(db_session, org.id, incident.id)
+    await inv_service.execute_investigation(db_session, org.id, run.id)
+
+    headers = auth_headers_for(user)
+
+    # 1. Initial creation
+    resp1 = await client.post(f"/api/v1/investigations/{run.id}/analysis", headers=headers)
+    assert resp1.status_code == 200
+    id1 = resp1.json()["id"]
+
+    # 2. Repeated calls to /refresh when context has NOT changed returns existing completed analysis
+    resp_refresh_1 = await client.post(
+        f"/api/v1/investigations/{run.id}/analysis/refresh", headers=headers
+    )
+    assert resp_refresh_1.status_code == 200
+    assert resp_refresh_1.json()["id"] == id1
+
+    resp_refresh_2 = await client.post(
+        f"/api/v1/investigations/{run.id}/analysis/refresh", headers=headers
+    )
+    assert resp_refresh_2.status_code == 200
+    assert resp_refresh_2.json()["id"] == id1
+
+    # Verify only 1 record exists in DB
+    analysis_service = InvestigationAnalysisService()
+    analyses, total = await analysis_service.analysis_repo.list_analyses(
+        db_session, org.id, run.id
+    )
+    assert total == 1

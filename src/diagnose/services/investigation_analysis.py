@@ -279,6 +279,15 @@ class InvestigationAnalysisService:
                 )
                 return existing
 
+        # Concurrency guard: reject concurrent execution on the same investigation
+        active = await self.analysis_repo.get_active_analysis(
+            session, organization_id, investigation_id
+        )
+        if active is not None:
+            raise ConflictError(
+                f"An LLM analysis ({active.id}) is currently in progress for this investigation."
+            )
+
         # Create record in PENDING status
         analysis_id = uuid.uuid4()
         analysis = InvestigationAnalysis(

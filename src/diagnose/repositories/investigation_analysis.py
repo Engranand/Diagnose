@@ -57,6 +57,27 @@ class InvestigationAnalysisRepository:
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_active_analysis(
+        self,
+        session: AsyncSession,
+        organization_id: uuid.UUID,
+        investigation_id: uuid.UUID,
+    ) -> InvestigationAnalysis | None:
+        """Find any currently active (PENDING or RUNNING) analysis for an investigation."""
+        stmt = (
+            select(InvestigationAnalysis)
+            .where(
+                InvestigationAnalysis.organization_id == organization_id,
+                InvestigationAnalysis.investigation_id == investigation_id,
+                InvestigationAnalysis.status.in_(
+                    [AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value]
+                ),
+            )
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_by_input_hash(
         self,
         session: AsyncSession,
