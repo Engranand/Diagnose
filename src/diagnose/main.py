@@ -18,6 +18,8 @@ from diagnose.db.session import create_engine, create_session_factory
 from diagnose.logging import setup_logging
 from diagnose.middleware.correlation_id import CorrelationIdMiddleware
 from diagnose.middleware.error_handler import setup_exception_handlers
+from diagnose.middleware.rate_limit import RateLimitMiddleware
+from diagnose.middleware.request_limits import RequestLimitsMiddleware
 from diagnose.settings import Settings, get_settings
 
 
@@ -68,7 +70,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.state.settings = settings
 
-    # ── Middleware (outermost first) ──────────────────────────────────
+    # ── Middleware (last added executes outermost first) ─────────────
+    app.add_middleware(
+        RateLimitMiddleware,
+        rate_limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
+        window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+        enabled=settings.RATE_LIMIT_ENABLED,
+    )
+    app.add_middleware(
+        RequestLimitsMiddleware,
+        max_body_size=settings.MAX_REQUEST_BODY_SIZE,
+        max_query_length=settings.MAX_QUERY_STRING_LENGTH,
+    )
     app.add_middleware(CorrelationIdMiddleware)
 
     # ── Exception handlers ───────────────────────────────────────────

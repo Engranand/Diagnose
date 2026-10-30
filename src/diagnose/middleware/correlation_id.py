@@ -15,6 +15,7 @@ and exception propagation.
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -22,10 +23,11 @@ import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 HEADER_NAME = b"x-request-id"
+log = structlog.get_logger()
 
 
 class CorrelationIdMiddleware:
-    """ASGI middleware that manages correlation IDs."""
+    """ASGI middleware that manages correlation IDs, binds context variables, and logs request metrics."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -36,6 +38,8 @@ class CorrelationIdMiddleware:
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
+
+        start_time = time.perf_counter()
 
         # Extract existing header or generate a new one
         headers = dict(scope.get("headers", []))
@@ -48,16 +52,23 @@ class CorrelationIdMiddleware:
         # reaching into structlog context vars.
         scope["state"] = {**scope.get("state", {}), "correlation_id": correlation_id}
 
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+
         # Bind into structlog context for the duration of this request
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             correlation_id=correlation_id,
-            method=scope.get("method", ""),
-            path=scope.get("path", ""),
+            method=method,
+            path=path,
         )
 
+        status_code: int = 500
+
         async def send_with_id(message: Message) -> None:
+            nonlocal status_code
             if message["type"] == "http.response.start":
+                status_code = message.get("status", 200)
                 response_headers: list[tuple[bytes, bytes]] = list(
                     message.get("headers", [])
                 )
@@ -67,4 +78,23 @@ class CorrelationIdMiddleware:
                 message["headers"] = response_headers
             await send(message)
 
-        await self.app(scope, receive, send_with_id)
+        try:
+            await self.app(scope, receive, send_with_id)
+        finally:
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            state = scope.get("state", {})
+            org_id = state.get("organization_id")
+            user_id = state.get("user_id")
+
+            # Structured logging of request completion (excluding health check to prevent log flooding)
+            if path != "/api/v1/health":
+                log.info(
+                    "http_request_finished",
+                    method=method,
+                    path=path,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    organization_id=org_id,
+                    user_id=user_id,
+                    correlation_id=correlation_id,
+                )

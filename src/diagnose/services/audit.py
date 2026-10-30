@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -74,3 +75,32 @@ class AuditService:
             ip_address=ip_address,
         )
         return await self.repository.create(session, entry)
+
+    async def list_audit_logs(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        action: str | None = None,
+        entity_type: str | None = None,
+        actor_user_id: UUID | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[AuditLog], int]:
+        """List and count tenant audit logs with filtering, sorting, and pagination."""
+        return await self.repository.list_by_organization(
+            session=session,
+            organization_id=organization_id,
+            action=action,
+            entity_type=entity_type,
+            actor_user_id=actor_user_id,
+            created_from=created_from,
+            created_to=created_to,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            offset=offset,
+            limit=limit,
+        )

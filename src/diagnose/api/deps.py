@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from diagnose.core.security import decode_access_token
@@ -35,6 +36,7 @@ def get_correlation_id(request: Request) -> str | None:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
     session: AsyncSession = Depends(get_db),
 ) -> User:
@@ -58,6 +60,17 @@ async def get_current_user(
     user = await repo.get_by_id(session, user_id=user_id, organization_id=org_id)
     if user is None or not user.is_active:
         raise AuthenticationError("User is inactive or no longer exists.")
+
+    # Bind tenant identity for observability and rate-limiting
+    if hasattr(request, "state"):
+        request.state.user_id = str(user.id)
+        request.state.organization_id = str(user.organization_id)
+    request.scope.setdefault("state", {})["user_id"] = str(user.id)
+    request.scope.setdefault("state", {})["organization_id"] = str(user.organization_id)
+    structlog.contextvars.bind_contextvars(
+        user_id=str(user.id),
+        organization_id=str(user.organization_id),
+    )
 
     return user
 

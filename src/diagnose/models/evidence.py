@@ -50,6 +50,7 @@ class Evidence(Base):
         Index("ix_evidence_org_incident_id", "organization_id", "incident_id"),
         Index("ix_evidence_org_type", "organization_id", "evidence_type"),
         Index("ix_evidence_org_observed_at", "organization_id", "observed_at"),
+        Index("ix_evidence_org_incident_observed", "organization_id", "incident_id", "observed_at"),
         Index("ix_evidence_org_hash", "organization_id", "evidence_hash"),
     )
 

@@ -243,11 +243,15 @@ class AlertService:
         incident_id: uuid.UUID | None = None,
         source: str | None = None,
         fingerprint: str | None = None,
-        page: int = 1,
-        page_size: int = 50,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        search: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        offset: int = 0,
+        limit: int = 50,
     ) -> tuple[Sequence[Alert], int]:
-        """List alerts with tenant scoping, filtering, and pagination."""
-        offset = (page - 1) * page_size
+        """List alerts with tenant scoping, filtering, search, sorting, and pagination."""
         return await self.alert_repo.list_alerts(
             session=session,
             organization_id=organization_id,
@@ -257,8 +261,13 @@ class AlertService:
             incident_id=incident_id,
             source=source,
             fingerprint=fingerprint,
+            created_from=created_from,
+            created_to=created_to,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
             offset=offset,
-            limit=page_size,
+            limit=limit,
         )
 
     async def update_alert(

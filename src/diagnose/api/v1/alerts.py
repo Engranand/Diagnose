@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
@@ -17,7 +18,9 @@ from diagnose.api.deps import (
 )
 from diagnose.domain.alerts import AlertSeverity, AlertStatus
 from diagnose.domain.roles import Permission
+from diagnose.domain.sorting import SortOrder
 from diagnose.models.user import User
+from diagnose.schemas.pagination import PaginationParams
 from diagnose.schemas.alert import (
     AlertCreate,
     AlertIncidentAssociation,
@@ -73,8 +76,12 @@ async def list_alerts(
     incident_id: UUID | None = Query(default=None, description="Filter by incident ID"),
     source: str | None = Query(default=None, description="Filter by alert source"),
     fingerprint: str | None = Query(default=None, description="Filter by alert fingerprint"),
-    page: int = Query(default=1, ge=1, description="Page number"),
-    page_size: int = Query(default=50, ge=1, le=100, description="Items per page"),
+    created_from: datetime | None = Query(default=None, description="Filter alerts created at or after"),
+    created_to: datetime | None = Query(default=None, description="Filter alerts created at or before"),
+    search: str | None = Query(default=None, max_length=100, description="Search title, message, and fingerprint"),
+    sort_by: str = Query(default="created_at", description="Field to sort by (created_at, last_seen_at, severity, status)"),
+    sort_order: SortOrder = Query(default=SortOrder.DESC, description="Sort direction (asc, desc)"),
+    pagination: PaginationParams = Depends(),
     current_user: User = Depends(require_permission(Permission.VIEW_ALERTS)),
     org_id: UUID = Depends(get_current_org_id),
     session: AsyncSession = Depends(get_db),
@@ -90,15 +97,20 @@ async def list_alerts(
         incident_id=incident_id,
         source=source,
         fingerprint=fingerprint,
-        page=page,
-        page_size=page_size,
+        created_from=created_from,
+        created_to=created_to,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order.value,
+        offset=pagination.offset,
+        limit=pagination.limit,
     )
-    pages = math.ceil(total / page_size) if total > 0 else 1
+    pages = pagination.calculate_pages(total)
     return AlertListResponse(
         items=[AlertRead.model_validate(item) for item in items],
         total=total,
-        page=page,
-        page_size=page_size,
+        page=pagination.page,
+        page_size=pagination.page_size,
         pages=pages,
     )
 

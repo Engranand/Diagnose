@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from diagnose.domain.sorting import validate_date_range, validate_sort_field
 from diagnose.models.alert import Alert
+
+ALERT_SORT_FIELDS = {
+    "created_at": Alert.created_at,
+    "last_seen_at": Alert.last_seen_at,
+    "severity": Alert.severity,
+    "status": Alert.status,
+}
 
 
 class AlertRepository:
@@ -67,10 +76,17 @@ class AlertRepository:
         incident_id: uuid.UUID | None = None,
         source: str | None = None,
         fingerprint: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        search: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[Sequence[Alert], int]:
-        """List and count alerts for an organization with optional filtering and pagination."""
+        """List and count alerts for an organization with optional filtering, search, sorting, and pagination."""
+        tz_from, tz_to = validate_date_range(created_from, created_to)
+
         base_query = select(Alert).where(Alert.organization_id == organization_id)
 
         if status is not None:
@@ -85,12 +101,34 @@ class AlertRepository:
             base_query = base_query.where(Alert.source == source)
         if fingerprint is not None:
             base_query = base_query.where(Alert.fingerprint == fingerprint)
+        if tz_from is not None:
+            base_query = base_query.where(Alert.created_at >= tz_from)
+        if tz_to is not None:
+            base_query = base_query.where(Alert.created_at <= tz_to)
+
+        if search:
+            escaped = search.strip().replace("%", "\\%").replace("_", "\\_")
+            base_query = base_query.where(
+                or_(
+                    Alert.title.ilike(f"%{escaped}%"),
+                    Alert.message.ilike(f"%{escaped}%"),
+                    Alert.fingerprint.ilike(f"%{escaped}%"),
+                )
+            )
 
         count_query = select(func.count()).select_from(base_query.subquery())
         total = (await session.execute(count_query)).scalar_one()
 
+        order_clauses = validate_sort_field(
+            sort_by=sort_by,
+            allowed_columns=ALERT_SORT_FIELDS,
+            default_field="created_at",
+            sort_order=sort_order,
+            tie_breaker_column=Alert.id,
+        )
+
         items_query = (
-            base_query.order_by(Alert.last_seen_at.desc())
+            base_query.order_by(*order_clauses)
             .offset(offset)
             .limit(limit)
         )

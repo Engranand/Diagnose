@@ -23,4 +23,15 @@ class AuditLogResponse(BaseModel):
     old_values: dict[str, Any] | None
     new_values: dict[str, Any] | None
     correlation_id: str | None
+    ip_address: str | None = None
     created_at: datetime
+
+
+class AuditLogListResponse(BaseModel):
+    """Paginated response envelope for audit logs."""
+
+    items: list[AuditLogResponse]
+    total: int
+    page: int
+    page_size: int
+    pages: int

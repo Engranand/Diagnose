@@ -158,11 +158,15 @@ class IncidentService:
         severity: IncidentSeverity | None = None,
         service_id: uuid.UUID | None = None,
         assigned_user_id: uuid.UUID | None = None,
-        page: int = 1,
-        page_size: int = 50,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        search: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        offset: int = 0,
+        limit: int = 50,
     ) -> tuple[Sequence[Incident], int]:
-        """List and count tenant incidents with filtering and pagination."""
-        offset = (page - 1) * page_size
+        """List and count tenant incidents with filtering, search, sorting, and pagination."""
         return await self.incident_repo.list_incidents(
             session=session,
             organization_id=organization_id,
@@ -170,8 +174,13 @@ class IncidentService:
             severity=severity.value if severity else None,
             service_id=service_id,
             assigned_user_id=assigned_user_id,
+            created_from=created_from,
+            created_to=created_to,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
             offset=offset,
-            limit=page_size,
+            limit=limit,
         )
 
     async def update_incident(

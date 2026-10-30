@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from diagnose.domain.sorting import validate_date_range, validate_sort_field
 from diagnose.models.incident import Incident
 from diagnose.models.incident_event import IncidentEvent
 from diagnose.models.organization import Organization
+
+INCIDENT_SORT_FIELDS = {
+    "created_at": Incident.created_at,
+    "updated_at": Incident.updated_at,
+    "severity": Incident.severity,
+    "status": Incident.status,
+}
 
 
 class IncidentRepository:
@@ -71,10 +80,17 @@ class IncidentRepository:
         severity: str | None = None,
         service_id: uuid.UUID | None = None,
         assigned_user_id: uuid.UUID | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        search: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[Sequence[Incident], int]:
-        """List and count incidents for a tenant with optional filtering and pagination."""
+        """List and count incidents for a tenant with optional filtering, search, sorting, and pagination."""
+        tz_from, tz_to = validate_date_range(created_from, created_to)
+
         base_query = select(Incident).where(Incident.organization_id == organization_id)
 
         if status is not None:
@@ -85,12 +101,33 @@ class IncidentRepository:
             base_query = base_query.where(Incident.service_id == service_id)
         if assigned_user_id is not None:
             base_query = base_query.where(Incident.assigned_user_id == assigned_user_id)
+        if tz_from is not None:
+            base_query = base_query.where(Incident.created_at >= tz_from)
+        if tz_to is not None:
+            base_query = base_query.where(Incident.created_at <= tz_to)
+
+        if search:
+            escaped = search.strip().replace("%", "\\%").replace("_", "\\_")
+            base_query = base_query.where(
+                or_(
+                    Incident.title.ilike(f"%{escaped}%"),
+                    Incident.description.ilike(f"%{escaped}%"),
+                )
+            )
 
         count_query = select(func.count()).select_from(base_query.subquery())
         total = (await session.execute(count_query)).scalar_one()
 
+        order_clauses = validate_sort_field(
+            sort_by=sort_by,
+            allowed_columns=INCIDENT_SORT_FIELDS,
+            default_field="created_at",
+            sort_order=sort_order,
+            tie_breaker_column=Incident.id,
+        )
+
         items_query = (
-            base_query.order_by(Incident.created_at.desc())
+            base_query.order_by(*order_clauses)
             .offset(offset)
             .limit(limit)
         )

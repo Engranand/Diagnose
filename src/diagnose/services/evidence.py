@@ -129,8 +129,13 @@ class EvidenceService:
         organization_id: uuid.UUID,
         incident_id: uuid.UUID,
         evidence_type: EvidenceType | None = None,
-        page: int = 1,
-        page_size: int = 50,
+        reliability: str | None = None,
+        observed_from: datetime | None = None,
+        observed_to: datetime | None = None,
+        sort_by: str = "observed_at",
+        sort_order: str = "asc",
+        offset: int = 0,
+        limit: int = 50,
     ) -> tuple[Sequence[Evidence], int]:
         """List and count evidence items for an incident within the tenant."""
         # Ensure incident exists in tenant
@@ -140,12 +145,16 @@ class EvidenceService:
         if incident is None:
             raise EntityNotFound("Incident", str(incident_id))
 
-        offset = (page - 1) * page_size
         return await self.evidence_repo.list_by_incident(
             session=session,
             organization_id=organization_id,
             incident_id=incident_id,
             evidence_type=evidence_type.value if evidence_type else None,
+            reliability=reliability,
+            observed_from=observed_from,
+            observed_to=observed_to,
+            sort_by=sort_by,
+            sort_order=sort_order,
             offset=offset,
-            limit=page_size,
+            limit=limit,
         )

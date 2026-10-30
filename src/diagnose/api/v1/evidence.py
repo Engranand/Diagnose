@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -15,9 +16,11 @@ from diagnose.api.deps import (
     get_db,
     require_permission,
 )
-from diagnose.domain.evidence import EvidenceType
+from diagnose.domain.evidence import EvidenceReliability, EvidenceType
 from diagnose.domain.roles import Permission
+from diagnose.domain.sorting import SortOrder
 from diagnose.models.user import User
+from diagnose.schemas.pagination import PaginationParams
 from diagnose.schemas.evidence import (
     EvidenceCreate,
     EvidenceListResponse,
@@ -65,8 +68,12 @@ async def add_evidence(
 async def list_incident_evidence(
     incident_id: UUID,
     evidence_type: EvidenceType | None = Query(default=None, description="Filter by evidence category"),
-    page: int = Query(default=1, ge=1, description="Page number"),
-    page_size: int = Query(default=50, ge=1, le=100, description="Items per page"),
+    reliability: EvidenceReliability | None = Query(default=None, description="Filter by reliability rating"),
+    observed_from: datetime | None = Query(default=None, description="Filter evidence observed at or after"),
+    observed_to: datetime | None = Query(default=None, description="Filter evidence observed at or before"),
+    sort_by: str = Query(default="observed_at", description="Field to sort by (observed_at, created_at)"),
+    sort_order: SortOrder = Query(default=SortOrder.ASC, description="Sort direction (asc, desc)"),
+    pagination: PaginationParams = Depends(),
     current_user: User = Depends(require_permission(Permission.VIEW_EVIDENCE)),
     org_id: UUID = Depends(get_current_org_id),
     session: AsyncSession = Depends(get_db),
@@ -78,15 +85,20 @@ async def list_incident_evidence(
         organization_id=org_id,
         incident_id=incident_id,
         evidence_type=evidence_type,
-        page=page,
-        page_size=page_size,
+        reliability=reliability.value if reliability else None,
+        observed_from=observed_from,
+        observed_to=observed_to,
+        sort_by=sort_by,
+        sort_order=sort_order.value,
+        offset=pagination.offset,
+        limit=pagination.limit,
     )
-    pages = math.ceil(total / page_size) if total > 0 else 1
+    pages = pagination.calculate_pages(total)
     return EvidenceListResponse(
         items=[EvidenceRead.model_validate(item) for item in items],
         total=total,
-        page=page,
-        page_size=page_size,
+        page=pagination.page,
+        page_size=pagination.page_size,
         pages=pages,
     )
 

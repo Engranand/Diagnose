@@ -131,16 +131,23 @@ class JobService:
         organization_id: uuid.UUID,
         status: JobStatus | None = None,
         job_type: str | None = None,
-        page: int = 1,
-        page_size: int = 50,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        offset: int = 0,
+        limit: int = 50,
     ) -> tuple[Sequence[Job], int]:
-        """List jobs with tenant scoping, filtering, and pagination."""
-        offset = (page - 1) * page_size
+        """List jobs with tenant scoping, filtering, sorting, and pagination."""
         return await self.job_repo.list_jobs(
             session=session,
             organization_id=organization_id,
             status=status.value if status else None,
             job_type=job_type,
+            created_from=created_from,
+            created_to=created_to,
+            sort_by=sort_by,
+            sort_order=sort_order,
             offset=offset,
-            limit=page_size,
+            limit=limit,
         )

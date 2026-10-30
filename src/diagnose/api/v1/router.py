@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from diagnose.api.v1.alerts import router as alerts_router
+from diagnose.api.v1.audit_logs import router as audit_logs_router
 from diagnose.api.v1.auth import router as auth_router
 from diagnose.api.v1.evidence import router as evidence_router
 from diagnose.api.v1.health import router as health_router
@@ -24,3 +25,4 @@ v1_router.include_router(incidents_router)
 v1_router.include_router(alerts_router)
 v1_router.include_router(evidence_router)
 v1_router.include_router(jobs_router)
+v1_router.include_router(audit_logs_router)

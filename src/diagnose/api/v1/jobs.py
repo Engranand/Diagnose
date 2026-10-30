@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
@@ -16,7 +17,9 @@ from diagnose.api.deps import (
 )
 from diagnose.domain.jobs import JobStatus
 from diagnose.domain.roles import Permission
+from diagnose.domain.sorting import SortOrder
 from diagnose.models.user import User
+from diagnose.schemas.pagination import PaginationParams
 from diagnose.schemas.job import JobCreate, JobListResponse, JobRead
 from diagnose.services.job import JobService
 
@@ -58,8 +61,11 @@ async def list_jobs(
     session: Annotated[AsyncSession, Depends(get_db)],
     status: Annotated[JobStatus | None, Query(description="Filter by job status")] = None,
     job_type: Annotated[str | None, Query(description="Filter by job type")] = None,
-    page: Annotated[int, Query(ge=1, description="Page number")] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100, description="Items per page")] = 50,
+    created_from: Annotated[datetime | None, Query(description="Filter jobs created at or after")] = None,
+    created_to: Annotated[datetime | None, Query(description="Filter jobs created at or before")] = None,
+    sort_by: Annotated[str, Query(description="Field to sort by (created_at, updated_at, status)")] = "created_at",
+    sort_order: Annotated[SortOrder, Query(description="Sort direction (asc, desc)")] = SortOrder.DESC,
+    pagination: PaginationParams = Depends(),
 ) -> JobListResponse:
     """List tenant jobs with filtering and pagination."""
     service = JobService()
@@ -68,14 +74,18 @@ async def list_jobs(
         organization_id=current_user.organization_id,
         status=status,
         job_type=job_type,
-        page=page,
-        page_size=page_size,
+        created_from=created_from,
+        created_to=created_to,
+        sort_by=sort_by,
+        sort_order=sort_order.value,
+        offset=pagination.offset,
+        limit=pagination.limit,
     )
     return JobListResponse(
         items=[JobRead.model_validate(j) for j in items],
         total=total,
-        page=page,
-        page_size=page_size,
+        page=pagination.page,
+        page_size=pagination.page_size,
     )
 
 

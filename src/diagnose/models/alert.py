@@ -55,6 +55,8 @@ class Alert(Base, TimestampMixin):
         Index("ix_alerts_org_service_id", "organization_id", "service_id"),
         Index("ix_alerts_org_incident_id", "organization_id", "incident_id"),
         Index("ix_alerts_org_fingerprint", "organization_id", "fingerprint"),
+        Index("ix_alerts_org_created_at", "organization_id", "created_at"),
+        Index("ix_alerts_org_last_seen_at", "organization_id", "last_seen_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

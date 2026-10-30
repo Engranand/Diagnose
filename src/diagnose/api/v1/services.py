@@ -15,7 +15,9 @@ from diagnose.api.deps import (
     require_permission,
 )
 from diagnose.domain.roles import Permission
+from diagnose.domain.sorting import SortOrder
 from diagnose.models.user import User
+from diagnose.schemas.pagination import PaginationParams
 from diagnose.schemas.service import ServiceCreate, ServiceRead, ServiceUpdate
 from diagnose.services.service import ServiceService
 
@@ -57,6 +59,10 @@ async def create_service(
 async def list_services(
     is_active: bool | None = Query(default=None, description="Filter by active status"),
     tier: str | None = Query(default=None, description="Filter by criticality tier"),
+    search: str | None = Query(default=None, max_length=100, description="Search by service name or slug"),
+    sort_by: str = Query(default="name", description="Field to sort by (name, created_at, tier)"),
+    sort_order: SortOrder = Query(default=SortOrder.ASC, description="Sort direction (asc, desc)"),
+    pagination: PaginationParams = Depends(),
     current_user: User = Depends(get_current_user),
     org_id: UUID = Depends(get_current_org_id),
     session: AsyncSession = Depends(get_db),
@@ -68,6 +74,11 @@ async def list_services(
         organization_id=org_id,
         is_active=is_active,
         tier=tier,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order.value,
+        offset=pagination.offset,
+        limit=pagination.limit,
     )
     return [ServiceRead.model_validate(s) for s in services]
 

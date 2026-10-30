@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # ── API ──────────────────────────────────────────────────────────
     API_V1_PREFIX: str = "/api/v1"
 
+    # ── Hardening & Limits (M7) ──────────────────────────────────────
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_PER_MINUTE: int = 120
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+    MAX_REQUEST_BODY_SIZE: int = 2 * 1024 * 1024  # 2MB
+    MAX_QUERY_STRING_LENGTH: int = 2048
+    DEFAULT_PAGE_SIZE: int = 50
+    MAX_PAGE_SIZE: int = 100
+
     model_config = {
         "env_prefix": "DIAGNOSE_",
         "env_file": ".env",

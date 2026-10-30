@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -18,7 +19,9 @@ from diagnose.api.deps import (
 from diagnose.domain.exceptions import AuthorizationError
 from diagnose.domain.incidents import IncidentSeverity, IncidentStatus
 from diagnose.domain.roles import Permission, has_permission
+from diagnose.domain.sorting import SortOrder
 from diagnose.models.user import User
+from diagnose.schemas.pagination import PaginationParams
 from diagnose.schemas.incident import (
     IncidentAssign,
     IncidentCreate,
@@ -70,8 +73,12 @@ async def list_incidents(
     severity: IncidentSeverity | None = Query(default=None, description="Filter by severity"),
     service_id: UUID | None = Query(default=None, description="Filter by service ID"),
     assigned_user_id: UUID | None = Query(default=None, description="Filter by assignee"),
-    page: int = Query(default=1, ge=1, description="Page number"),
-    page_size: int = Query(default=50, ge=1, le=100, description="Items per page"),
+    created_from: datetime | None = Query(default=None, description="Filter incidents created at or after"),
+    created_to: datetime | None = Query(default=None, description="Filter incidents created at or before"),
+    search: str | None = Query(default=None, max_length=100, description="Search title and description"),
+    sort_by: str = Query(default="created_at", description="Field to sort by (created_at, updated_at, severity, status)"),
+    sort_order: SortOrder = Query(default=SortOrder.DESC, description="Sort direction (asc, desc)"),
+    pagination: PaginationParams = Depends(),
     current_user: User = Depends(require_permission(Permission.VIEW_INCIDENTS)),
     org_id: UUID = Depends(get_current_org_id),
     session: AsyncSession = Depends(get_db),
@@ -85,15 +92,20 @@ async def list_incidents(
         severity=severity,
         service_id=service_id,
         assigned_user_id=assigned_user_id,
-        page=page,
-        page_size=page_size,
+        created_from=created_from,
+        created_to=created_to,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order.value,
+        offset=pagination.offset,
+        limit=pagination.limit,
     )
-    pages = math.ceil(total / page_size) if total > 0 else 1
+    pages = pagination.calculate_pages(total)
     return IncidentListResponse(
         items=[IncidentRead.model_validate(item) for item in items],
         total=total,
-        page=page,
-        page_size=page_size,
+        page=pagination.page,
+        page_size=pagination.page_size,
         pages=pages,
     )
 

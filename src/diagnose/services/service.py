@@ -102,13 +102,26 @@ class ServiceService:
         organization_id: uuid.UUID,
         is_active: bool | None = None,
         tier: str | None = None,
+        search: str | None = None,
+        sort_by: str = "name",
+        sort_order: str = "asc",
+        offset: int = 0,
+        limit: int = 50,
     ) -> Sequence[Service]:
-        """List all services for an organization."""
+        """List all services for an organization with optional filtering, search, sorting, and pagination."""
         validated_tier = None
         if tier is not None:
             validated_tier = validate_service_tier(tier).value
         return await self.repository.list_by_organization(
-            session, organization_id, is_active=is_active, tier=validated_tier
+            session=session,
+            organization_id=organization_id,
+            is_active=is_active,
+            tier=validated_tier,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            offset=offset,
+            limit=limit,
         )
 
     async def update_service(

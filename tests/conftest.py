@@ -47,9 +47,18 @@ async def app(test_settings: Settings):
     engine: AsyncEngine = create_engine(test_settings)
     application.state.db_engine = engine
     application.state.db_session_factory = create_session_factory(engine)
-    application.state.redis = aioredis.from_url(
-        test_settings.REDIS_URL, decode_responses=True
-    )
+    try:
+        r = aioredis.from_url(
+            test_settings.REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=0.05,
+            socket_timeout=0.05,
+        )
+        await r.ping()
+        application.state.redis = r
+    except Exception:
+        from tests.fake_redis import FakeAsyncRedis
+        application.state.redis = FakeAsyncRedis()
 
     yield application
 
