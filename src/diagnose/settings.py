@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     DEFAULT_PAGE_SIZE: int = 50
     MAX_PAGE_SIZE: int = 100
 
+    # ── LLM Configuration (M9) ───────────────────────────────────────
+    LLM_PROVIDER: str = "mock"
+    LLM_MODEL: str = "mock-gpt-4o"
+    LLM_API_KEY: str | None = None
+    LLM_BASE_URL: str | None = None
+    LLM_TIMEOUT_SECONDS: int = 30
+
     model_config = {
         "env_prefix": "DIAGNOSE_",
         "env_file": ".env",

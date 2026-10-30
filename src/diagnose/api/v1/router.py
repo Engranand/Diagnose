@@ -10,6 +10,7 @@ from diagnose.api.v1.auth import router as auth_router
 from diagnose.api.v1.evidence import router as evidence_router
 from diagnose.api.v1.health import router as health_router
 from diagnose.api.v1.incidents import router as incidents_router
+from diagnose.api.v1.investigation_analysis import router as investigation_analysis_router
 from diagnose.api.v1.investigations import (
     incident_investigations_router,
     router as investigations_router,
@@ -28,6 +29,7 @@ v1_router.include_router(services_router)
 v1_router.include_router(incidents_router)
 v1_router.include_router(incident_investigations_router)
 v1_router.include_router(investigations_router)
+v1_router.include_router(investigation_analysis_router)
 v1_router.include_router(alerts_router)
 v1_router.include_router(evidence_router)
 v1_router.include_router(jobs_router)

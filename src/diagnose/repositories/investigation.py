@@ -213,6 +213,24 @@ class InvestigationRepository:
         session.add_all(causes)
         await session.flush()
 
+    async def list_candidate_causes(
+        self,
+        session: AsyncSession,
+        organization_id: uuid.UUID,
+        investigation_run_id: uuid.UUID,
+    ) -> Sequence[CandidateCause]:
+        """List candidate causes for an investigation run."""
+        query = (
+            select(CandidateCause)
+            .where(
+                CandidateCause.organization_id == organization_id,
+                CandidateCause.investigation_run_id == investigation_run_id,
+            )
+            .order_by(CandidateCause.score.desc(), CandidateCause.id.asc())
+        )
+        result = await session.execute(query)
+        return result.scalars().all()
+
     async def create_hypotheses(
         self, session: AsyncSession, hypotheses: list[InvestigationHypothesis]
     ) -> None:

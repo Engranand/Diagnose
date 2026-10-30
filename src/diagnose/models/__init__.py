@@ -15,6 +15,7 @@ from diagnose.models.investigation import (
     InvestigationStep,
     InvestigationTimelineEvent,
 )
+from diagnose.models.investigation_analysis import InvestigationAnalysis
 from diagnose.models.job import Job
 from diagnose.models.job_effect import JobEffect
 from diagnose.models.organization import Organization
@@ -37,6 +38,7 @@ __all__ = [
     "CandidateCause",
     "InvestigationHypothesis",
     "HypothesisEvidence",
+    "InvestigationAnalysis",
     "Alert",
     "Evidence",
     "AuditLog",

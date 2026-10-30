@@ -25,6 +25,7 @@ from diagnose.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from diagnose.models.incident import Incident
+    from diagnose.models.investigation_analysis import InvestigationAnalysis
     from diagnose.models.organization import Organization
     from diagnose.models.service import Service
 
@@ -115,6 +116,12 @@ class InvestigationRun(Base, TimestampMixin):
         back_populates="run",
         cascade="all, delete-orphan",
         order_by="InvestigationHypothesis.rank.asc()",
+    )
+    analyses: Mapped[list[InvestigationAnalysis]] = orm_relationship(
+        "InvestigationAnalysis",
+        back_populates="investigation",
+        cascade="all, delete-orphan",
+        order_by="InvestigationAnalysis.created_at.desc()",
     )
 
 
