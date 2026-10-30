@@ -35,6 +35,8 @@ class Permission(StrEnum):
     VIEW_ALERTS = "view:alerts"
     ASSOCIATE_ALERT = "associate:alert"
     VIEW_EVIDENCE = "view:evidence"
+    VIEW_JOBS = "view:jobs"
+    TRIGGER_JOB = "trigger:job"
 
 
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
@@ -53,6 +55,8 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VIEW_ALERTS,
         Permission.ASSOCIATE_ALERT,
         Permission.VIEW_EVIDENCE,
+        Permission.VIEW_JOBS,
+        Permission.TRIGGER_JOB,
     },
     Role.ENGINEER: {
         Permission.CREATE_INCIDENT,
@@ -66,6 +70,8 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VIEW_ALERTS,
         Permission.ASSOCIATE_ALERT,
         Permission.VIEW_EVIDENCE,
+        Permission.VIEW_JOBS,
+        Permission.TRIGGER_JOB,
     },
     Role.RESPONDER: {
         Permission.CREATE_INCIDENT,
@@ -77,11 +83,13 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VIEW_ALERTS,
         Permission.ASSOCIATE_ALERT,
         Permission.VIEW_EVIDENCE,
+        Permission.VIEW_JOBS,
     },
     Role.VIEWER: {
         Permission.VIEW_INCIDENTS,
         Permission.VIEW_ALERTS,
         Permission.VIEW_EVIDENCE,
+        Permission.VIEW_JOBS,
     },
 }
 

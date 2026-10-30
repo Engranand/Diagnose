@@ -14,7 +14,9 @@ from diagnose.domain.roles import Role
 from diagnose.models.alert import Alert
 from diagnose.models.evidence import Evidence
 from diagnose.models.incident import Incident
+from diagnose.models.job import Job
 from diagnose.models.organization import Organization
+from diagnose.models.outbox import OutboxEvent
 from diagnose.models.service import Service
 from diagnose.models.user import User
 
@@ -215,3 +217,59 @@ async def create_test_evidence(
     await session.commit()
     await session.refresh(evidence)
     return evidence
+
+
+async def create_test_job(
+    session: AsyncSession,
+    organization_id: UUID,
+    job_type: str = "TEST_JOB",
+    status: str = "PENDING",
+    payload: dict | None = None,
+    correlation_id: str | None = None,
+    idempotency_key: str | None = None,
+    attempt_count: int = 0,
+    max_attempts: int = 3,
+) -> Job:
+    """Create and persist a job for tests."""
+    job = Job(
+        organization_id=organization_id,
+        job_type=job_type,
+        status=status,
+        payload=payload,
+        correlation_id=correlation_id,
+        idempotency_key=idempotency_key,
+        attempt_count=attempt_count,
+        max_attempts=max_attempts,
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+async def create_test_outbox_event(
+    session: AsyncSession,
+    organization_id: UUID,
+    event_type: str = "job.created",
+    aggregate_type: str = "job",
+    aggregate_id: str | None = None,
+    payload: dict | None = None,
+    status: str = "PENDING",
+    attempt_count: int = 0,
+    max_attempts: int = 5,
+) -> OutboxEvent:
+    """Create and persist an outbox event for tests."""
+    event = OutboxEvent(
+        organization_id=organization_id,
+        event_type=event_type,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id or uuid.uuid4().hex,
+        payload=payload,
+        status=status,
+        attempt_count=attempt_count,
+        max_attempts=max_attempts,
+    )
+    session.add(event)
+    await session.commit()
+    await session.refresh(event)
+    return event
