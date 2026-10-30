@@ -7,6 +7,7 @@ from diagnose.models.evidence import Evidence
 from diagnose.models.incident import Incident
 from diagnose.models.incident_event import IncidentEvent
 from diagnose.models.job import Job
+from diagnose.models.job_effect import JobEffect
 from diagnose.models.organization import Organization
 from diagnose.models.outbox import OutboxEvent
 from diagnose.models.service import Service
@@ -24,5 +25,6 @@ __all__ = [
     "Evidence",
     "AuditLog",
     "Job",
+    "JobEffect",
     "OutboxEvent",
 ]

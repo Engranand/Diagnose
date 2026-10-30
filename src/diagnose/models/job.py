@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from diagnose.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from diagnose.models.job_effect import JobEffect
     from diagnose.models.organization import Organization
 
 
@@ -121,4 +122,9 @@ class Job(Base, TimestampMixin):
     organization: Mapped[Organization] = relationship(
         "Organization",
         back_populates="jobs",
+    )
+    effects: Mapped[list[JobEffect]] = relationship(
+        "JobEffect",
+        back_populates="job",
+        cascade="all, delete-orphan",
     )

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from diagnose.domain.jobs import (
@@ -314,3 +315,80 @@ class Worker:
             return None
 
         return await self.process_job(session_factory, job_data)
+
+    async def recover_stuck_job(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        organization_id: uuid.UUID,
+        job_id: uuid.UUID,
+    ) -> Job | None:
+        """Recover a job left in RUNNING status after a worker crash or unexpected death.
+
+        Transitions the job back to RETRYING so that it can be safely re-dispatched and executed.
+        """
+        async with session_factory() as session:
+            job = await self.job_repo.get_by_id(
+                session=session,
+                organization_id=organization_id,
+                job_id=job_id,
+                for_update=True,
+            )
+            if job is None:
+                return None
+            if job.status != JobStatus.RUNNING.value:
+                log.info("job_not_in_running_state_skipping_recovery", job_id=str(job_id), status=job.status)
+                return job
+
+            now = datetime.now(timezone.utc)
+            job.status = JobStatus.RETRYING.value
+            job.available_at = now
+            await self.audit_service.record(
+                session=session,
+                organization_id=organization_id,
+                actor_user_id=None,
+                action="JOB_RECOVERED_AFTER_CRASH",
+                entity_type="job",
+                entity_id=job.id,
+                new_values={"previous_status": "RUNNING", "new_status": "RETRYING"},
+                correlation_id=job.correlation_id,
+            )
+            await session.commit()
+            log.info("stuck_job_recovered", job_id=str(job.id), organization_id=str(organization_id))
+            return job
+
+    async def recover_stuck_jobs(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        timeout_seconds: int = 300,
+    ) -> list[Job]:
+        """Find and recover all jobs stuck in RUNNING status older than timeout_seconds."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+        recovered: list[Job] = []
+        async with session_factory() as session:
+            stmt = (
+                select(Job)
+                .where(
+                    Job.status == JobStatus.RUNNING.value,
+                    Job.started_at <= cutoff,
+                )
+                .with_for_update(skip_locked=True)
+            )
+            result = await session.execute(stmt)
+            stuck_jobs = list(result.scalars().all())
+            now = datetime.now(timezone.utc)
+            for job in stuck_jobs:
+                job.status = JobStatus.RETRYING.value
+                job.available_at = now
+                await self.audit_service.record(
+                    session=session,
+                    organization_id=job.organization_id,
+                    actor_user_id=None,
+                    action="JOB_RECOVERED_AFTER_CRASH",
+                    entity_type="job",
+                    entity_id=job.id,
+                    new_values={"previous_status": "RUNNING", "new_status": "RETRYING"},
+                    correlation_id=job.correlation_id,
+                )
+                recovered.append(job)
+            await session.commit()
+        return recovered

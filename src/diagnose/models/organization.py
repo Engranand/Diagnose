@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from diagnose.models.incident import Incident
     from diagnose.models.incident_event import IncidentEvent
     from diagnose.models.job import Job
+    from diagnose.models.job_effect import JobEffect
     from diagnose.models.outbox import OutboxEvent
     from diagnose.models.service import Service
     from diagnose.models.user import User
@@ -94,6 +95,11 @@ class Organization(Base, TimestampMixin):
     )
     outbox_events: Mapped[list[OutboxEvent]] = relationship(
         "OutboxEvent",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    job_effects: Mapped[list[JobEffect]] = relationship(
+        "JobEffect",
         back_populates="organization",
         cascade="all, delete-orphan",
     )

@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from diagnose.domain.jobs import JobStatus
 from diagnose.models.audit_log import AuditLog
 from diagnose.models.job import Job
+from diagnose.models.job_effect import JobEffect
 from diagnose.repositories.job import JobRepository
-from diagnose.workers.handlers import register_handler
+from diagnose.repositories.job_effect import JobEffectRepository
+from diagnose.workers.handlers import WorkerCrashSimulation, register_handler
 from diagnose.workers.queue import RedisQueue
 from diagnose.workers.worker import Worker
 from tests.factories import create_test_job, create_test_organization
@@ -236,3 +238,102 @@ async def test_concurrent_worker_execution_row_locking(
     async with session_factory() as session:
         db_job = await JobRepository().get_by_id(session, org.id, job.id)
         assert db_job.status == JobStatus.SUCCEEDED.value
+
+
+@pytest.mark.asyncio
+async def test_crash_recovery_preserves_idempotent_side_effect(
+    app, db_session: AsyncSession
+) -> None:
+    """M6 Correction: Worker crash after committing durable side-effect does not duplicate effect on retry."""
+    session_factory = app.state.db_session_factory
+    org = await create_test_organization(db_session)
+    effect_key = f"durable-effect-{uuid.uuid4().hex[:8]}"
+
+    job = await create_test_job(
+        db_session,
+        org.id,
+        job_type="TEST_JOB",
+        payload={
+            "effect_key": effect_key,
+            "crash_after_effect": True,
+        },
+    )
+
+    worker = Worker()
+    job_ref = {"job_id": str(job.id), "organization_id": str(org.id)}
+
+    # 1. Attempt 1: Worker executes handler, handler commits JobEffect, then worker crashes abruptly
+    with pytest.raises(WorkerCrashSimulation):
+        await worker.process_job(session_factory, job_ref)
+
+    # In DB: Job is still RUNNING because the worker crashed before marking SUCCEEDED
+    async with session_factory() as session:
+        db_job = await JobRepository().get_by_id(session, org.id, job.id)
+        assert db_job.status == JobStatus.RUNNING.value
+
+        # The side-effect WAS durably committed to PostgreSQL
+        effect_repo = JobEffectRepository()
+        effect = await effect_repo.get_by_effect_key(session, org.id, effect_key)
+        assert effect is not None
+        assert effect.status == "COMMITTED"
+
+    # 2. Crash recovery: Supervisor recovers stuck RUNNING job back to RETRYING
+    recovered_job = await worker.recover_stuck_job(session_factory, org.id, job.id)
+    assert recovered_job is not None
+    assert recovered_job.status == JobStatus.RETRYING.value
+
+    # 3. Attempt 2: Worker retries the job
+    # The handler checks JobEffect, sees COMMITTED, skips side-effect, and does NOT crash
+    retry_result = await worker.process_job(session_factory, job_ref)
+    assert retry_result is not None
+    assert retry_result.status == JobStatus.SUCCEEDED.value
+
+    # 4. Final verification: exactly ONE durable effect exists in PostgreSQL
+    async with session_factory() as session:
+        q_effects = select(JobEffect).where(
+            JobEffect.organization_id == org.id,
+            JobEffect.effect_key == effect_key,
+        )
+        effects = (await session.execute(q_effects)).scalars().all()
+        assert len(effects) == 1
+        assert effects[0].status == "COMMITTED"
+        assert effects[0].job_id == job.id
+
+        # Verify audit logs record recovery and success
+        q_audit = select(AuditLog.action).where(
+            AuditLog.organization_id == org.id,
+            AuditLog.entity_id == job.id,
+        )
+        actions = (await session.execute(q_audit)).scalars().all()
+        assert "JOB_STARTED" in actions
+        assert "JOB_RECOVERED_AFTER_CRASH" in actions
+        assert "JOB_SUCCEEDED" in actions
+
+
+@pytest.mark.asyncio
+async def test_stuck_jobs_batch_sweep_recovery(
+    app, db_session: AsyncSession
+) -> None:
+    """Worker.recover_stuck_jobs sweeps timed-out RUNNING jobs."""
+    from datetime import datetime, timedelta, timezone
+
+    session_factory = app.state.db_session_factory
+    org = await create_test_organization(db_session)
+
+    job = await create_test_job(
+        db_session,
+        org.id,
+        job_type="TEST_JOB",
+    )
+    job.status = JobStatus.RUNNING.value
+    job.started_at = datetime.now(timezone.utc) - timedelta(seconds=400)
+    await db_session.commit()
+
+    worker = Worker()
+    recovered = await worker.recover_stuck_jobs(session_factory, timeout_seconds=300)
+    recovered_ids = [j.id for j in recovered]
+    assert job.id in recovered_ids
+
+    async with session_factory() as session:
+        refreshed = await JobRepository().get_by_id(session, org.id, job.id)
+        assert refreshed.status == JobStatus.RETRYING.value
