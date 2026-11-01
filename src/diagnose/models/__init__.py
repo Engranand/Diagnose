@@ -17,9 +17,11 @@ from diagnose.models.investigation import (
 )
 from diagnose.models.investigation_analysis import InvestigationAnalysis
 from diagnose.models.job import Job
+from diagnose.models.approval import ActionApproval
 from diagnose.models.job_effect import JobEffect
 from diagnose.models.organization import Organization
 from diagnose.models.outbox import OutboxEvent
+from diagnose.models.policy import PolicyEvaluation, RemediationPolicy
 from diagnose.models.remediation import ActionExecution, RemediationAction
 from diagnose.models.service import Service
 from diagnose.models.user import User
@@ -48,4 +50,7 @@ __all__ = [
     "OutboxEvent",
     "RemediationAction",
     "ActionExecution",
+    "RemediationPolicy",
+    "PolicyEvaluation",
+    "ActionApproval",
 ]

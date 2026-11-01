@@ -52,6 +52,7 @@ class ActionExecutionResponse(BaseModel):
     action_id: uuid.UUID
     status: str
     execution_mode: ExecutionMode
+    plan_hash: str | None = None
     started_at: datetime | None
     completed_at: datetime | None
     result: dict[str, Any] | None = None

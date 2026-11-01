@@ -16,12 +16,14 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from diagnose.models.base import Base
 
 if TYPE_CHECKING:
+    from diagnose.models.approval import ActionApproval
     from diagnose.models.incident import Incident
     from diagnose.models.organization import Organization
     from diagnose.models.service import Service
@@ -151,6 +153,11 @@ class RemediationAction(Base):
         cascade="all, delete-orphan",
         order_by="ActionExecution.created_at.asc()",
     )
+    approvals: Mapped[list[ActionApproval]] = relationship(
+        "ActionApproval",
+        back_populates="action",
+        order_by="ActionApproval.created_at.asc()",
+    )
     incident: Mapped[Incident] = relationship("Incident")
     service: Mapped[Service] = relationship("Service")
     proposer: Mapped[User | None] = relationship("User", foreign_keys=[proposed_by])
@@ -177,6 +184,14 @@ class ActionExecution(Base):
         ),
         Index("ix_action_executions_org_action", "organization_id", "action_id"),
         Index("ix_action_executions_org_created_at", "organization_id", "created_at"),
+        Index("ix_action_executions_action_mode", "action_id", "execution_mode"),
+        Index("ix_action_executions_plan_hash", "plan_hash"),
+        Index(
+            "uq_action_executions_single_succeeded",
+            "action_id",
+            unique=True,
+            postgresql_where=text("status = 'SUCCEEDED' AND execution_mode = 'EXECUTE'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -202,6 +217,11 @@ class ActionExecution(Base):
         String(20),
         nullable=False,
         default="DRY_RUN",
+    )
+    plan_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
     )
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),

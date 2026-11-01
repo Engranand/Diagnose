@@ -43,6 +43,10 @@ class Permission(StrEnum):
     PROPOSE_ACTION = "action:propose"
     APPROVE_ACTION = "action:approve"
     VIEW_ACTIONS = "action:view"
+    DRY_RUN_ACTION = "action:dry_run"
+    EXECUTE_ACTION = "action:execute"
+    MANAGE_POLICY = "policy:manage"
+    VIEW_POLICY = "policy:view"
 
 
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
@@ -69,6 +73,10 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.PROPOSE_ACTION,
         Permission.APPROVE_ACTION,
         Permission.VIEW_ACTIONS,
+        Permission.DRY_RUN_ACTION,
+        Permission.EXECUTE_ACTION,
+        Permission.MANAGE_POLICY,
+        Permission.VIEW_POLICY,
     },
     Role.ENGINEER: {
         Permission.CREATE_INCIDENT,
@@ -89,6 +97,9 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VIEW_INVESTIGATIONS,
         Permission.PROPOSE_ACTION,
         Permission.VIEW_ACTIONS,
+        Permission.DRY_RUN_ACTION,
+        Permission.EXECUTE_ACTION,
+        Permission.VIEW_POLICY,
     },
     Role.RESPONDER: {
         Permission.CREATE_INCIDENT,
@@ -106,6 +117,9 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VIEW_INVESTIGATIONS,
         Permission.PROPOSE_ACTION,
         Permission.VIEW_ACTIONS,
+        Permission.DRY_RUN_ACTION,
+        Permission.EXECUTE_ACTION,
+        Permission.VIEW_POLICY,
     },
     Role.VIEWER: {
         Permission.VIEW_INCIDENTS,
@@ -114,6 +128,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VIEW_JOBS,
         Permission.VIEW_INVESTIGATIONS,
         Permission.VIEW_ACTIONS,
+        Permission.VIEW_POLICY,
     },
 }
 

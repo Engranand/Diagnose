@@ -16,13 +16,21 @@ from diagnose.api.deps import (
 )
 from diagnose.domain.roles import Permission
 from diagnose.models.user import User
+from diagnose.schemas.approval import ActionApprovalResponse, ActionApproveRequest
+from diagnose.schemas.dry_run import DryRunRequest, DryRunResponse
+from diagnose.schemas.execution import ActionExecuteRequest
 from diagnose.schemas.pagination import PaginatedResponse, PaginationParams
+from diagnose.schemas.policy import PolicyEvaluationResponse
 from diagnose.schemas.remediation import (
     ActionCreateRequest,
+    ActionExecutionResponse,
     ActionRejectRequest,
     RemediationActionDetailResponse,
     RemediationActionResponse,
 )
+from diagnose.services.dry_run import DryRunService
+from diagnose.services.execution import ControlledExecutionService
+from diagnose.services.policy import PolicyService
 from diagnose.services.remediation import RemediationService
 
 incident_actions_router = APIRouter(prefix="/incidents", tags=["remediation"])
@@ -54,6 +62,7 @@ async def propose_action(
         incident_id=incident_id,
         data=payload,
         actor_user_id=current_user.id,
+        actor_role=current_user.role,
         correlation_id=correlation_id,
     )
     return RemediationActionResponse.model_validate(action)
@@ -146,21 +155,96 @@ async def submit_action(
 )
 async def approve_action(
     action_id: UUID,
+    payload: ActionApproveRequest | None = None,
     current_user: User = Depends(require_permission(Permission.APPROVE_ACTION)),
     org_id: UUID = Depends(get_current_org_id),
     session: AsyncSession = Depends(get_db),
     correlation_id: str | None = Depends(get_correlation_id),
 ) -> RemediationActionResponse:
-    """Advance action from PENDING_APPROVAL to APPROVED."""
+    """Advance action from PENDING_APPROVAL to APPROVED under strict separation of duties and plan verification."""
     service = RemediationService()
+    reason = payload.reason if payload else None
+    dry_run_plan_hash = payload.dry_run_plan_hash if payload else None
     action = await service.approve_action(
         session=session,
         organization_id=org_id,
         action_id=action_id,
         actor_user_id=current_user.id,
+        reason=reason,
+        dry_run_plan_hash=dry_run_plan_hash,
+        actor_role=current_user.role,
         correlation_id=correlation_id,
     )
     return RemediationActionResponse.model_validate(action)
+
+
+@actions_router.get(
+    "/{action_id}/approvals",
+    response_model=list[ActionApprovalResponse],
+    summary="List human approval records and audit trail for an action",
+)
+async def list_action_approvals(
+    action_id: UUID,
+    current_user: User = Depends(require_permission(Permission.VIEW_ACTIONS)),
+    org_id: UUID = Depends(get_current_org_id),
+    session: AsyncSession = Depends(get_db),
+) -> list[ActionApprovalResponse]:
+    """List immutable approval and rejection records for a remediation action."""
+    service = RemediationService()
+    approvals = await service.list_approvals_for_action(
+        session=session,
+        organization_id=org_id,
+        action_id=action_id,
+    )
+    return [ActionApprovalResponse.model_validate(appr) for appr in approvals]
+
+
+@actions_router.post(
+    "/{action_id}/evaluate-policy",
+    response_model=PolicyEvaluationResponse,
+    summary="Evaluate active policies on an existing action without state changes",
+)
+async def evaluate_action_policy(
+    action_id: UUID,
+    current_user: User = Depends(require_permission(Permission.VIEW_ACTIONS)),
+    org_id: UUID = Depends(get_current_org_id),
+    session: AsyncSession = Depends(get_db),
+) -> PolicyEvaluationResponse:
+    """Run deterministic dry-run policy evaluation on an existing remediation action."""
+    rem_service = RemediationService()
+    action = await rem_service.get_action(session, org_id, action_id)
+
+    from diagnose.domain.policy import PolicyEvaluationContext
+    from diagnose.domain.remediation import ActionType, ExecutionMode, RiskLevel
+    from diagnose.domain.roles import Role
+    from diagnose.repositories.service import ServiceRepository
+
+    service_repo = ServiceRepository()
+    svc = await service_repo.get_by_id(session, org_id, action.service_id)
+
+    context = PolicyEvaluationContext(
+        organization_id=org_id,
+        incident_id=action.incident_id,
+        service_id=action.service_id,
+        service_tier=svc.tier if svc else "MEDIUM",
+        action_type=ActionType(action.action_type),
+        risk_level=RiskLevel(action.risk_level),
+        execution_mode=ExecutionMode(action.execution_mode),
+        environment="UNKNOWN",
+        actor_id=current_user.id,
+        actor_role=Role(current_user.role),
+        action_id=action.id,
+    )
+
+    policy_service = PolicyService()
+    evaluation = await policy_service.evaluate_context_and_persist(
+        session=session,
+        context=context,
+        action_id=action.id,
+        actor_user_id=current_user.id,
+    )
+    await session.commit()
+    return PolicyEvaluationResponse.model_validate(evaluation)
 
 
 @actions_router.post(
@@ -212,3 +296,70 @@ async def cancel_action(
         correlation_id=correlation_id,
     )
     return RemediationActionResponse.model_validate(action)
+
+
+@actions_router.post(
+    "/{action_id}/dry-run",
+    response_model=DryRunResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute deterministic dry-run on an approved remediation action",
+)
+async def dry_run_action(
+    action_id: UUID,
+    payload: DryRunRequest | None = None,
+    current_user: User = Depends(require_permission(Permission.DRY_RUN_ACTION)),
+    org_id: UUID = Depends(get_current_org_id),
+    session: AsyncSession = Depends(get_db),
+    correlation_id: str | None = Depends(get_correlation_id),
+) -> DryRunResponse:
+    """Execute dry-run simulation, producing deterministic execution plan and simulated outcome."""
+    service = DryRunService()
+    params = payload.parameters if payload else None
+    idempotency_key = payload.idempotency_key if payload else None
+    executor_type = payload.executor_type if payload else "SIMULATOR"
+    res = await service.execute_dry_run(
+        session=session,
+        organization_id=org_id,
+        action_id=action_id,
+        actor_user_id=current_user.id,
+        actor_role=current_user.role,
+        idempotency_key=idempotency_key,
+        parameters_override=params,
+        requested_executor_type=executor_type,
+        correlation_id=correlation_id,
+    )
+    await session.commit()
+    return res
+
+
+@actions_router.post(
+    "/{action_id}/execute",
+    response_model=ActionExecutionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute an approved remediation action through the controlled execution boundary",
+)
+async def execute_action(
+    action_id: UUID,
+    payload: ActionExecuteRequest | None = None,
+    current_user: User = Depends(require_permission(Permission.EXECUTE_ACTION)),
+    org_id: UUID = Depends(get_current_org_id),
+    session: AsyncSession = Depends(get_db),
+    correlation_id: str | None = Depends(get_correlation_id),
+) -> ActionExecutionResponse:
+    """Execute an approved remediation action deterministically and safely."""
+    service = ControlledExecutionService()
+    params = payload.parameters if payload else None
+    idempotency_key = payload.idempotency_key if payload else None
+    executor_type = payload.executor_type if payload else "SIMULATOR"
+    execution = await service.execute_action(
+        session=session,
+        organization_id=org_id,
+        action_id=action_id,
+        actor_user_id=current_user.id,
+        actor_role=current_user.role,
+        requested_executor_type=executor_type,
+        parameters_override=params,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+    )
+    return ActionExecutionResponse.model_validate(execution)

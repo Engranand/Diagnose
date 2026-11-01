@@ -81,14 +81,26 @@ VALID_ACTION_TRANSITIONS: dict[ActionStatus, set[ActionStatus]] = {
 def validate_action_transition(
     current_status: ActionStatus | str,
     target_status: ActionStatus | str,
+    auto_approval_provenance: Any | None = None,
 ) -> None:
     """Validate that transition from current_status to target_status is valid.
+
+    Direct transition from PROPOSED to APPROVED is strictly restricted to cases with
+    authoritative, persisted policy auto-approval provenance (decision == 'ALLOW').
 
     Raises:
         InvalidStateTransition: If transition is not permitted by the state machine.
     """
     curr = current_status if isinstance(current_status, ActionStatus) else ActionStatus(current_status)
     target = target_status if isinstance(target_status, ActionStatus) else ActionStatus(target_status)
+
+    if curr == ActionStatus.PROPOSED and target == ActionStatus.APPROVED:
+        if auto_approval_provenance is None:
+            raise InvalidStateTransition("RemediationAction", curr.value, target.value)
+        decision = getattr(auto_approval_provenance, "decision", None)
+        if decision != "ALLOW":
+            raise InvalidStateTransition("RemediationAction", curr.value, target.value)
+        return
 
     allowed = VALID_ACTION_TRANSITIONS.get(curr, set())
     if target not in allowed:

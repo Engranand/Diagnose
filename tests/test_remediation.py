@@ -98,6 +98,7 @@ async def test_service_action_lifecycle_and_audit_events(
     service_entity = await create_test_service(db_session, org.id)
     incident = await create_test_incident(db_session, org.id, service_entity.id)
     admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+    admin2 = await create_test_user(db_session, org.id, role=Role.ADMIN, email="admin2-audit@example.com")
 
     rem_service = RemediationService()
 
@@ -136,17 +137,17 @@ async def test_service_action_lifecycle_and_audit_events(
     assert action.status == ActionStatus.PENDING_APPROVAL.value
     assert action.version == 2
 
-    # 3. Approve action -> ACTION_APPROVED
+    # 3. Approve action -> ACTION_APPROVED (approved by admin2 to observe separation of duties)
     action = await rem_service.approve_action(
         session=db_session,
         organization_id=org.id,
         action_id=action.id,
-        actor_user_id=admin.id,
+        actor_user_id=admin2.id,
         correlation_id="corr-approve-1",
     )
     await db_session.commit()
     assert action.status == ActionStatus.APPROVED.value
-    assert action.approved_by == admin.id
+    assert action.approved_by == admin2.id
     assert action.version == 3
 
     # 4. Record execution start -> ACTION_EXECUTION_STARTED
@@ -205,6 +206,7 @@ async def test_service_rejection_cancellation_and_failure_audits(
     service_entity = await create_test_service(db_session, org.id)
     incident = await create_test_incident(db_session, org.id, service_entity.id)
     admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+    approver = await create_test_user(db_session, org.id, role=Role.ADMIN, email="approver-reject@example.com")
 
     rem_service = RemediationService()
 
@@ -252,7 +254,7 @@ async def test_service_rejection_cancellation_and_failure_audits(
         db_session, org.id, incident.id, req3, admin.id
     )
     await rem_service.submit_for_approval(db_session, org.id, action3.id, admin.id)
-    await rem_service.approve_action(db_session, org.id, action3.id, admin.id)
+    await rem_service.approve_action(db_session, org.id, action3.id, approver.id)
     exec_run = await rem_service.record_execution_started(
         db_session, org.id, action3.id
     )
@@ -291,6 +293,7 @@ async def test_failed_action_leaves_no_orphan_audit_events(
     svc = await create_test_service(db_session, org.id)
     inc = await create_test_incident(db_session, org.id, svc.id)
     admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+    approver = await create_test_user(db_session, org.id, role=Role.ADMIN, email="approver-invalid@example.com")
 
     rem_service = RemediationService()
     req = ActionCreateRequest(
@@ -305,9 +308,9 @@ async def test_failed_action_leaves_no_orphan_audit_events(
     count_stmt = select(AuditLog).where(AuditLog.organization_id == org.id)
     initial_count = len((await db_session.execute(count_stmt)).scalars().all())
 
-    # Try invalid transition directly: PROPOSED -> APPROVED
+    # Try invalid transition directly: PROPOSED -> APPROVED (using distinct approver)
     with pytest.raises(InvalidStateTransition):
-        await rem_service.approve_action(db_session, org.id, action.id, admin.id)
+        await rem_service.approve_action(db_session, org.id, action.id, approver.id)
 
     # Verify audit log count did not increase
     post_count = len((await db_session.execute(count_stmt)).scalars().all())
@@ -655,8 +658,10 @@ async def test_api_state_transition_flow_and_errors(
     svc = await create_test_service(db_session, org.id)
     inc = await create_test_incident(db_session, org.id, svc.id)
     admin = await create_test_user(db_session, org.id, role=Role.ADMIN)
+    admin2 = await create_test_user(db_session, org.id, role=Role.ADMIN, email="admin2-state@example.com")
 
     headers = auth_headers_for(admin)
+    headers2 = auth_headers_for(admin2)
 
     # 1. Propose action
     r_create = await client.post(
@@ -675,7 +680,7 @@ async def test_api_state_transition_flow_and_errors(
     # Invalid: Cannot approve from PROPOSED -> 409
     r_invalid_app = await client.post(
         f"/api/v1/actions/{action_id}/approve",
-        headers=headers,
+        headers=headers2,
     )
     assert r_invalid_app.status_code == 409
 
@@ -712,12 +717,13 @@ async def test_api_state_transition_flow_and_errors(
     # Cannot transition rejected action -> 409
     r_re_app = await client.post(
         f"/api/v1/actions/{action2_id}/approve",
-        headers=headers,
+        headers=headers2,
     )
     assert r_re_app.status_code == 409
 
     # Cancel action 1 from APPROVED
-    await client.post(f"/api/v1/actions/{action_id}/approve", headers=headers)
+    r_app1 = await client.post(f"/api/v1/actions/{action_id}/approve", headers=headers2)
+    assert r_app1.status_code == 200
     r_cancel = await client.post(
         f"/api/v1/actions/{action_id}/cancel",
         headers=headers,

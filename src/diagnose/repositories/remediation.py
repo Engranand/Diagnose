@@ -113,3 +113,43 @@ class RemediationRepository:
         )
         result = await session.execute(query)
         return result.scalar_one_or_none()
+
+    async def get_latest_execution_for_action(
+        self,
+        session: AsyncSession,
+        organization_id: uuid.UUID,
+        action_id: uuid.UUID,
+    ) -> ActionExecution | None:
+        """Retrieve the latest execution attempt for an action."""
+        query = (
+            select(ActionExecution)
+            .where(
+                ActionExecution.organization_id == organization_id,
+                ActionExecution.action_id == action_id,
+            )
+            .order_by(ActionExecution.created_at.desc())
+            .limit(1)
+        )
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_successful_execution_for_action(
+        self,
+        session: AsyncSession,
+        organization_id: uuid.UUID,
+        action_id: uuid.UUID,
+    ) -> ActionExecution | None:
+        """Retrieve any existing successful execution for the action in EXECUTE mode."""
+        query = (
+            select(ActionExecution)
+            .where(
+                ActionExecution.organization_id == organization_id,
+                ActionExecution.action_id == action_id,
+                ActionExecution.execution_mode == "EXECUTE",
+                ActionExecution.status == "SUCCEEDED",
+            )
+            .order_by(ActionExecution.created_at.desc())
+            .limit(1)
+        )
+        result = await session.execute(query)
+        return result.scalar_one_or_none()

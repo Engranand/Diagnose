@@ -28,12 +28,18 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import structlog
 
 from diagnose.domain.exceptions import (
+    ActionNotExecutableError,
     AuthenticationError,
     AuthorizationError,
     ConflictError,
     DomainException,
+    DryRunHashMismatchError,
     EntityNotFound,
+    ExecutionPreconditionError,
     InvalidStateTransition,
+    PolicyViolationError,
+    SeparationOfDutiesError,
+    UnsupportedExecutorError,
     ValidationError as DomainValidationError,
 )
 
@@ -110,6 +116,54 @@ def setup_exception_handlers(app: FastAPI) -> None:
             correlation_id=cid,
         )
 
+    @app.exception_handler(SeparationOfDutiesError)
+    async def _separation_of_duties(
+        request: Request, exc: SeparationOfDutiesError
+    ) -> JSONResponse:
+        cid = _get_correlation_id(request)
+        return _error_response(
+            status.HTTP_403_FORBIDDEN,
+            "SEPARATION_OF_DUTIES_VIOLATION",
+            str(exc),
+            correlation_id=cid,
+        )
+
+    @app.exception_handler(DryRunHashMismatchError)
+    async def _dry_run_hash_mismatch(
+        request: Request, exc: DryRunHashMismatchError
+    ) -> JSONResponse:
+        cid = _get_correlation_id(request)
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "DRY_RUN_HASH_MISMATCH",
+            str(exc),
+            correlation_id=cid,
+        )
+
+    @app.exception_handler(ExecutionPreconditionError)
+    async def _execution_precondition_error(
+        request: Request, exc: ExecutionPreconditionError
+    ) -> JSONResponse:
+        cid = _get_correlation_id(request)
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            "EXECUTION_PRECONDITION_FAILED",
+            str(exc),
+            correlation_id=cid,
+        )
+
+    @app.exception_handler(UnsupportedExecutorError)
+    async def _unsupported_executor_error(
+        request: Request, exc: UnsupportedExecutorError
+    ) -> JSONResponse:
+        cid = _get_correlation_id(request)
+        return _error_response(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "UNSUPPORTED_EXECUTOR",
+            str(exc),
+            correlation_id=cid,
+        )
+
     @app.exception_handler(AuthorizationError)
     async def _authorization_error(
         request: Request, exc: AuthorizationError
@@ -117,6 +171,24 @@ def setup_exception_handlers(app: FastAPI) -> None:
         cid = _get_correlation_id(request)
         return _error_response(
             status.HTTP_403_FORBIDDEN, "FORBIDDEN", str(exc), correlation_id=cid
+        )
+
+    @app.exception_handler(PolicyViolationError)
+    async def _policy_violation(
+        request: Request, exc: PolicyViolationError
+    ) -> JSONResponse:
+        cid = _get_correlation_id(request)
+        return _error_response(
+            status.HTTP_403_FORBIDDEN, "POLICY_VIOLATION", str(exc), correlation_id=cid
+        )
+
+    @app.exception_handler(ActionNotExecutableError)
+    async def _action_not_executable(
+        request: Request, exc: ActionNotExecutableError
+    ) -> JSONResponse:
+        cid = _get_correlation_id(request)
+        return _error_response(
+            status.HTTP_400_BAD_REQUEST, "ACTION_NOT_EXECUTABLE", str(exc), correlation_id=cid
         )
 
     @app.exception_handler(ConflictError)
